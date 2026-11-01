@@ -14,6 +14,7 @@
     </div>
     <div class="open-actions">
       <label class="btn">选择视频文件<input type="file" id="fileInput" accept="video/*,audio/*" hidden></label>
+      <button class="btn" id="browseBtn">浏览文件</button>
       <span class="divider">或</span>
       <input type="text" id="pathInput" class="path-input" placeholder="本地文件绝对路径，例如 D:\videos\demo.mp4" spellcheck="false">
       <button class="btn primary" id="loadPathBtn">从路径载入</button>
@@ -173,6 +174,28 @@
       <div id="taskList"><p class="hint">暂无任务</p></div>
     </section>
   </main>
+
+  <!-- 本地文件浏览器 -->
+  <div class="modal" id="fsModal" hidden>
+    <div class="modal-card" role="dialog" aria-label="浏览本地文件">
+      <div class="modal-head">
+        <h2>浏览本地文件</h2>
+        <button class="btn small" id="fsCloseBtn">关闭 (Esc)</button>
+      </div>
+      <div class="fs-toolbar">
+        <button class="btn small" id="fsUpBtn" title="返回上级目录">上级</button>
+        <div class="fs-roots" id="fsRoots"></div>
+        <input type="text" id="fsPathInput" class="path-input" spellcheck="false" placeholder="目录绝对路径">
+        <button class="btn small" id="fsGoBtn">前往</button>
+        <select id="fsFilter">
+          <option value="media">媒体文件</option>
+          <option value="all">全部文件</option>
+        </select>
+      </div>
+      <div class="fs-list" id="fsList"><p class="hint">载入中…</p></div>
+      <p class="hint">单击文件夹进入；单击媒体文件直接载入播放。仅浏览本机磁盘（服务所在机器）。</p>
+    </div>
+  </div>
 
   <script src="/vendor/artplayer.js"></script>
   <script src="/timeline_math.js"></script>

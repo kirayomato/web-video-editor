@@ -62,6 +62,19 @@ def assert_local_path(p, *, must_exist: bool = True) -> str:
     return s
 
 
+def assert_local_dir(p) -> str:
+    """清洗并规范化为绝对路径，要求目录存在（文件浏览器用）。"""
+    s = clean_path_str(p)
+    if not s:
+        raise ValueError("缺少路径参数")
+    if "\x00" in s or '"' in s:
+        raise ValueError("路径含非法字符")
+    s = os.path.normpath(os.path.abspath(s))
+    if not os.path.isdir(s):
+        raise ValueError(f"目录不存在：{s}")
+    return s
+
+
 def parse_fps(rate):
     if not rate or rate == "0/0":
         return None

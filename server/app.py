@@ -18,7 +18,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from ffmpeg_ops import (  # noqa: E402
     CACHE_DIR, FFMPEG, FFPROBE, OUT_DIR, UPLOAD_DIR,
-    assert_local_path, build_timeline_assets, ffmpeg_version, keyframes_near, probe,
+    assert_local_dir, assert_local_path, build_timeline_assets, clean_path_str,
+    ffmpeg_version, keyframes_near, probe,
 )
 from tasks import store  # noqa: E402
 
@@ -55,6 +56,57 @@ def file_stat(p: str):
         return st if os.path.isfile(p) else None
     except OSError:
         return None
+
+
+# 本地文件浏览器：常见视频/音频扩展名（过滤用）
+MEDIA_EXTS = {
+    ".mp4", ".webm", ".mkv", ".mov", ".avi", ".flv", ".m4v", ".ts", ".mts", ".m2ts",
+    ".wmv", ".mpg", ".mpeg", ".mpe", ".3gp", ".ogv", ".rm", ".rmvb", ".vob", ".divx",
+    ".m4a", ".mp3", ".wav", ".aac", ".flac", ".opus", ".ogg", ".wma", ".mka", ".ape", ".aiff",
+}
+
+
+def list_roots() -> list:
+    """列出可浏览的根（Windows 盘符 / Unix 根）。"""
+    if os.name == "nt":
+        roots = [f"{c}:\\" for c in "ABCDEFGHIJKLMNOPQRSTUVWXYZ" if os.path.exists(f"{c}:\\")]
+        return roots or ["C:\\"]
+    return ["/"]
+
+
+def list_dir(path: str, show_all: bool = False) -> dict:
+    """列出目录内容：文件夹恒显示，文件按媒体扩展名过滤（show_all=True 时全显示）。"""
+    p = assert_local_dir(path)
+    entries = []
+    try:
+        names = os.listdir(p)
+    except PermissionError as e:
+        raise ValueError(f"无权限访问目录：{p}") from e
+    for name in names:
+        full = os.path.join(p, name)
+        try:
+            st = os.stat(full)
+        except OSError:
+            continue
+        is_dir = os.path.isdir(full)
+        ext = "" if is_dir else os.path.splitext(name)[1].lower()
+        if not is_dir and not show_all and ext not in MEDIA_EXTS:
+            continue
+        entries.append({
+            "name": name,
+            "path": full,
+            "isDir": is_dir,
+            "size": 0 if is_dir else st.st_size,
+            "mtime": st.st_mtime,
+            "ext": ext,
+            "media": (not is_dir) and ext in MEDIA_EXTS,
+        })
+    entries.sort(key=lambda e: (not e["isDir"], e["name"].lower()))
+    norm = os.path.normpath(p)
+    parent = os.path.dirname(norm)
+    if parent == norm:  # 盘符根 / Unix 根
+        parent = None
+    return {"path": norm, "parent": parent, "entries": entries, "total": len(entries)}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -232,6 +284,16 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 file_path = assert_local_path(q.get("path"))
                 return self._json(200, build_timeline_assets(file_path))
+            except Exception as e:
+                return self._error(400, str(e))
+
+        if p == "/api/fs/roots" and method == "GET":
+            return self._json(200, {"roots": list_roots()})
+
+        if p == "/api/fs/list" and method == "GET":
+            try:
+                show_all = (q.get("all") or "").lower() in ("1", "true", "yes")
+                return self._json(200, list_dir(q.get("path"), show_all=show_all))
             except Exception as e:
                 return self._error(400, str(e))
 

@@ -627,9 +627,124 @@
     });
   }
 
+  // ---------------- 本地文件浏览器 ----------------
+  const FS_LAST_DIR_KEY = 'wve.fsLastDir';
+
+  function fsInitialDir() {
+    const saved = localStorage.getItem(FS_LAST_DIR_KEY);
+    if (saved) return saved;
+    if (state.path) {
+      const i = Math.max(state.path.lastIndexOf('\\'), state.path.lastIndexOf('/'));
+      if (i > 0) return state.path.slice(0, i);
+    }
+    return null; // 由后端 roots 决定
+  }
+
+  function fsParentOf(p) {
+    const i = Math.max(p.lastIndexOf('\\'), p.lastIndexOf('/'));
+    if (i <= 0) return null;
+    // Windows 盘符根：D:\
+    const head = p.slice(0, i);
+    if (/^[A-Za-z]:$/.test(head)) return head + '\\';
+    return head || null;
+  }
+
+  async function fsNavigate(path) {
+    const list = $('fsList');
+    list.innerHTML = '<p class="fs-empty">载入中…</p>';
+    try {
+      if (path == null) {
+        const d = await api('/api/fs/roots');
+        path = (d.roots && d.roots[0]) || null;
+        if (!path) { list.innerHTML = '<p class="fs-empty">没有可用的磁盘根</p>'; return; }
+      }
+      const all = $('fsFilter').value === 'all' ? '&all=1' : '';
+      const data = await api(`/api/fs/list?path=${encodeURIComponent(path)}${all}`);
+      localStorage.setItem(FS_LAST_DIR_KEY, data.path);
+      $('fsPathInput').value = data.path;
+      renderFsList(data);
+    } catch (e) {
+      list.innerHTML = `<p class="fs-empty">无法打开：${e.message}</p>`;
+    }
+  }
+
+  function renderFsList(data) {
+    const list = $('fsList');
+    const up = $('fsUpBtn');
+    up.disabled = !data.parent;
+    up.onclick = () => data.parent && fsNavigate(data.parent);
+
+    if (!data.entries.length) {
+      list.innerHTML = '<p class="fs-empty">此目录没有可显示的内容（可在上方切换「全部文件」）</p>';
+      return;
+    }
+    list.innerHTML = data.entries.map((e) => `
+      <div class="fs-row" data-path="${encodeURIComponent(e.path)}" data-dir="${e.isDir ? 1 : 0}"
+           title="${e.isDir ? '单击进入' : '单击载入播放'}">
+        <span class="fs-icon">${e.isDir ? '📁' : (e.media ? '🎬' : '📄')}</span>
+        <span class="fs-name ${e.isDir ? 'dir' : ''}">${e.name.replace(/[<>&]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c]))}</span>
+        <span class="fs-size">${e.isDir ? '' : fmtBytes(e.size)}</span>
+        <span class="fs-mtime">${new Date(e.mtime * 1000).toLocaleString()}</span>
+      </div>`).join('');
+
+    list.querySelectorAll('.fs-row').forEach((row) => {
+      row.addEventListener('click', () => {
+        const p = decodeURIComponent(row.dataset.path);
+        if (row.dataset.dir === '1') fsNavigate(p);
+        else {
+          closeFsBrowser();
+          loadFromPath(p);
+        }
+      });
+    });
+  }
+
+  function openFsBrowser() {
+    $('fsModal').hidden = false;
+    const start = fsInitialDir();
+    if (!$('fsRoots').childElementCount) {
+      api('/api/fs/roots').then((d) => {
+        $('fsRoots').innerHTML = (d.roots || []).map((r) =>
+          `<button class="btn small" data-root="${encodeURIComponent(r)}">${r.replace(/[\\/]$/, '')}</button>`
+        ).join('');
+        $('fsRoots').querySelectorAll('[data-root]').forEach((b) => {
+          b.addEventListener('click', () => fsNavigate(decodeURIComponent(b.dataset.root)));
+        });
+      }).catch(() => {});
+    }
+    fsNavigate(start);
+  }
+
+  function closeFsBrowser() {
+    $('fsModal').hidden = true;
+  }
+
+  function bindFsBrowser() {
+    $('browseBtn').addEventListener('click', openFsBrowser);
+    $('fsCloseBtn').addEventListener('click', closeFsBrowser);
+    $('fsModal').addEventListener('mousedown', (e) => {
+      if (e.target === $('fsModal')) closeFsBrowser();
+    });
+    $('fsGoBtn').addEventListener('click', () => {
+      const p = cleanPath($('fsPathInput').value);
+      if (p) fsNavigate(p);
+    });
+    $('fsPathInput').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') $('fsGoBtn').click();
+    });
+    $('fsFilter').addEventListener('change', () => {
+      const cur = cleanPath($('fsPathInput').value);
+      if (cur) fsNavigate(cur);
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && !$('fsModal').hidden) closeFsBrowser();
+    });
+  }
+
   // ---------------- 初始化 ----------------
   function bindUI() {
     $('fileInput').addEventListener('change', (e) => handleFile(e.target.files[0]));
+    bindFsBrowser();
     $('loadPathBtn').addEventListener('click', () => {
       const p = cleanPath($('pathInput').value);
       if (!p) return err('请输入文件路径');

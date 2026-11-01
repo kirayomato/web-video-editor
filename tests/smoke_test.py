@@ -254,6 +254,52 @@ def main():
     else:
         check("timeline_math 单测", False, "node 或测试文件缺失")
 
+    # 17. 本地文件浏览器（/api/fs/roots + /api/fs/list）
+    roots = get("/api/fs/roots")
+    check("fs/roots 返回盘符", isinstance(roots.get("roots"), list) and len(roots["roots"]) >= 1, str(roots.get("roots")))
+    tmp_dir = os.path.join(ROOT, "tmp")
+    listing = get(f"/api/fs/list?path={urllib.parse.quote(tmp_dir)}")
+    names = [e["name"] for e in listing.get("entries", [])]
+    check("fs/list 列出目录", listing.get("path", "").lower() == os.path.normpath(tmp_dir).lower(), listing.get("path"))
+    check("fs/list 含媒体文件 sample.mp4", "sample.mp4" in names, f"共 {len(names)} 项")
+    sample_entries = [e for e in listing["entries"] if e["name"] == "sample.mp4"]
+    if sample_entries:
+        e = sample_entries[0]
+        check("媒体项标记 media/size", e.get("media") is True and e.get("size", 0) > 1000, f"media={e.get('media')} size={e.get('size')}")
+    check("fs/list 文件夹优先排序", all(
+        (listing["entries"][i]["isDir"] or not listing["entries"][i + 1]["isDir"])
+        for i in range(len(listing["entries"]) - 1)
+    ) if listing.get("entries") else True)
+    # 过滤：默认隐藏非媒体文件，all=1 显示
+    probe_txt = os.path.join(tmp_dir, "fs_probe_note.txt")
+    with open(probe_txt, "w", encoding="utf-8") as f:
+        f.write("x")
+    listing2 = get(f"/api/fs/list?path={urllib.parse.quote(tmp_dir)}")
+    check("默认过滤非媒体文件", "fs_probe_note.txt" not in [e["name"] for e in listing2["entries"]])
+    listing3 = get(f"/api/fs/list?path={urllib.parse.quote(tmp_dir)}&all=1")
+    check("all=1 显示全部文件", "fs_probe_note.txt" in [e["name"] for e in listing3["entries"]])
+    os.remove(probe_txt)
+    # 路径清洗：带引号目录可浏览
+    listing4 = get(f"/api/fs/list?path={urllib.parse.quote(chr(34) + tmp_dir + chr(34))}")
+    check("引号目录路径可浏览", listing4.get("total", 0) > 0, f"total={listing4.get('total')}")
+    # 错误路径报「目录不存在」
+    err = ""
+    try:
+        get("/api/fs/list?path=" + urllib.parse.quote("Z:\\no_such_dir"))
+    except urllib.error.HTTPError as e:
+        err = json.loads(e.read().decode("utf-8") or "{}").get("error", "")
+    check("不存在目录报「目录不存在」", "不存在" in err, err[:80])
+    # 文件当目录浏览 → 同样报错
+    err = ""
+    try:
+        get(f"/api/fs/list?path={urllib.parse.quote(SAMPLE)}")
+    except urllib.error.HTTPError as e:
+        err = json.loads(e.read().decode("utf-8") or "{}").get("error", "")
+    check("文件路径不可当目录浏览", "不存在" in err or "目录" in err, err[:80])
+    # 前端入口
+    check("首页含浏览文件入口", 'id="browseBtn"' in page and 'id="fsModal"' in page)
+    check("app.js 含文件浏览器逻辑", "/api/fs/list" in src and "openFsBrowser" in src)
+
     print(f"\n===== 结果: PASS={PASS} FAIL={FAIL} =====")
     return 1 if FAIL else 0
 
