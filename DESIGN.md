@@ -156,7 +156,7 @@ ffmpeg -i in.mp4 -c:v libx264 -crf 23 -preset medium -c:a copy out.mp4
 - **无损/精确双模式**：默认无损快切，UI 上提示"切点将对齐最近关键帧（{time}）"，提供"精确切割"开关（借鉴 LosslessCut）。
 - **进度**：spawn 时加 `-progress pipe:1`，解析 `out_time_ms` 映射百分比，经 SSE 推前端。
 - **命令透明**：所有任务展示完整 ffmpeg 命令，可复制到终端复跑——既是调试利器也符合"用 ffmpeg 剪辑"的定位。
-- **波形**：一次性预处理 `ffmpeg -filter_complex showwavespic=s=1600x160` 生成波形图，产物缓存；时间线只显示波形，点击跳转、拖动扫动由前端映射时间轴。
+- **波形**：一次性预处理 `showwavespic=s=1600x160` 生成波形图，产物缓存；**幅度按音量自动缩放**——先按峰值归一（`volumedetect` + `volume` 增益，安静录音自动放大、上限 60dB），再按内容裁切由 CSS 拉伸填满时间线（文件内相对动态保留）；点击跳转、拖动扫动由前端映射时间轴。
 
 ### 3.3 技术栈
 
@@ -164,7 +164,7 @@ ffmpeg -i in.mp4 -c:v libx264 -crf 23 -preset medium -c:a copy out.mp4
 |---|---|---|
 | 播放器 | **ArtPlayer 5.x**（MIT） | 自定义控制/进度条高亮标记/倍速/逐帧均支持，vendor 静态引入 |
 | 前端 | 原生 JS + CSS（无构建步骤） | 零依赖，`node server.js` 即可运行，无需 npm install |
-| 波形 | ffmpeg 生成（showwavespic） | 时间线只显示音频波形，不依赖第三方前端库 |
+| 波形 | ffmpeg 生成（showwavespic + 峰值归一/裁切） | 幅度按音量自动缩放，不依赖第三方前端库 |
 | 后端 | **Python 3 标准库**（http.server + subprocess，零第三方依赖） | `python server/app.py` 直接运行，无需 pip install |
 | ffmpeg 调度 | 手写 `child_process.spawn`（参数数组，不经 shell） | 参数完全可控，便于命令预览 |
 | ffmpeg 来源 | 系统 PATH 优先（本机 7.1.1 gyan full build），`FFMPEG_PATH`/`FFPROBE_PATH` 可覆盖 | 免安装体验 |

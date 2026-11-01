@@ -3,6 +3,7 @@
 import json
 import os
 import shutil
+import struct
 import subprocess
 import sys
 import time
@@ -207,6 +208,32 @@ def main():
     check("不存在文件报「文件不存在」", "不存在" in err, err[:80])
     t = post("/api/tasks", {"type": "trim", "path": '"' + SAMPLE + '"', "start": 1, "end": 2, "mode": "lossless", "dryRun": True})
     check("任务提交同样清洗路径", "-c copy" in (t.get("command") or ""), (t.get("command") or "")[:60])
+
+    # 15. 波形自动缩放（峰值归一 + 内容裁切填满）
+    sys.path.insert(0, os.path.join(ROOT, "server"))
+    from ffmpeg_ops import wave_gain_db
+    quiet = os.path.join(ROOT, "tmp", "quiet_sample.m4a")
+    if not os.path.isfile(quiet):
+        subprocess.run(
+            ["ffmpeg", "-y", "-v", "error", "-f", "lavfi",
+             "-i", "sine=frequency=440:duration=6:sample_rate=44100",
+             "-af", "volume=0.05", "-c:a", "aac", quiet],
+            check=True)
+    g = wave_gain_db(quiet)
+    check("安静音频自动增益（峰值归一）", g >= 20, f"gain={g:.1f}dB")
+    tlq = get(f"/api/timeline?path={urllib.parse.quote(quiet)}")
+    check("安静文件生成波形", bool(tlq.get("wave")), tlq.get("wave"))
+    if tlq.get("wave"):
+        data = get(tlq["wave"], raw=True)
+        wpng = os.path.join(ROOT, "tmp", "quiet_wave.png")
+        with open(wpng, "wb") as f:
+            f.write(data)
+        w, h = struct.unpack(">II", data[16:24])
+        gray = subprocess.run(
+            ["ffmpeg", "-v", "error", "-i", wpng, "-f", "rawvideo", "-pix_fmt", "gray", "-"],
+            capture_output=True).stdout
+        ink = sum(1 for yy in range(h) if any(gray[yy * w + xx] > 40 for xx in range(w)))
+        check("波形幅度自动填满（≥85% 高）", ink >= h * 0.85, f"{ink}/{h}")
 
     print(f"\n===== 结果: PASS={PASS} FAIL={FAIL} =====")
     return 1 if FAIL else 0

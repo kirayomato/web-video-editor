@@ -430,20 +430,84 @@ class StepRunner:
             raise RuntimeError("\n".join(err.splitlines()[-8:]) or f"ffmpeg 退出码 {code}")
 
 
+def wave_gain_db(file_path: str) -> float:
+    """波形显示用自动增益（dB）：把音频峰值拉到 0dBFS，安静录音自动放大。
+
+    只影响波形可视化，不改动任何导出产物。静音/无音轨返回 0；
+    增益上限 60dB，防止近乎静音的噪底被拉爆。
+    """
+    try:
+        proc = subprocess.run(
+            [FFMPEG, "-hide_banner", "-nostdin", "-i", file_path,
+             "-map", "0:a:0", "-af", "volumedetect", "-f", "null", "-"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, **_popen_flags(),
+        )
+    except Exception:
+        return 0.0
+    m = re.search(r"max_volume:\s*(-inf|-?[\d.]+)\s*dB", proc.stderr.decode("utf-8", "replace"))
+    if not m or m.group(1) == "-inf":
+        return 0.0
+    return max(0.0, min(-float(m.group(1)), 60.0))
+
+
+def _wave_band(png_file: str, w: int, h: int) -> tuple[int, int]:
+    """返回波形内容的竖直裁切范围 (y, height)：对称于中线，带 2px 余量。
+
+    showwavespic 的幅度映射有固有余量（0dBFS ≈ 64% 高），裁切后由
+    CSS 拉伸，波形自动填满时间线高度；文件内相对动态保留。
+    """
+    proc = subprocess.run(
+        [FFMPEG, "-v", "error", "-i", png_file, "-f", "rawvideo", "-pix_fmt", "gray", "-"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, **_popen_flags(),
+    )
+    raw = proc.stdout
+    if len(raw) < w * h:
+        raise RuntimeError("波形图解码失败")
+    top = bottom = None
+    for yy in range(h):
+        row = raw[yy * w:(yy + 1) * w]
+        if any(p > 40 for p in row):
+            if top is None:
+                top = yy
+            bottom = yy
+    if top is None:
+        return 0, h  # 全黑（纯静音）→ 不裁切
+    mid = (h - 1) / 2
+    half = max(bottom - mid, mid - top) + 2
+    half = max(half, 16.0)   # 纯平线不过度放大
+    half = min(half, h / 2)
+    y = int(round(mid - half))
+    hh = int(round(2 * half))
+    hh = min(hh, h - y)
+    hh -= hh % 2
+    return (y, hh) if hh >= 2 else (0, h)
+
+
 def build_timeline_assets(file_path: str) -> dict:
-    """生成时间线波形素材（时间线只显示音频波形；点击跳转由前端处理）。"""
+    """生成时间线波形素材（时间线只显示音频波形；点击跳转由前端处理）。
+
+    幅度自动缩放：先按峰值归一（安静录音自动放大），再按内容裁切填满显示。
+    """
     st = os.stat(file_path)
-    # wave2：生成参数变更后与旧缓存区分
-    key = hashlib.sha1(f"wave2|{file_path}|{st.st_size}|{st.st_mtime}".encode()).hexdigest()[:16]
+    # wave4：波形自动增益 + 内容裁切，与旧缓存区分
+    key = hashlib.sha1(f"wave4|{file_path}|{st.st_size}|{st.st_mtime}".encode()).hexdigest()[:16]
     wave_file = CACHE_DIR / f"{key}_wave.png"
+    raw_file = CACHE_DIR / f"{key}_wave_raw.png"
 
     if not wave_file.exists():
         try:
+            gain = wave_gain_db(file_path)
             run_collect([
                 FFMPEG, "-y", "-hide_banner", "-nostdin", "-i", file_path,
-                "-filter_complex", "showwavespic=s=1600x160:colors=#378ADD",
-                "-frames:v", "1", str(wave_file),
+                "-filter_complex", f"volume={gain:.2f}dB,showwavespic=s=1600x160:colors=#378ADD",
+                "-frames:v", "1", str(raw_file),
             ], 8 * 1024 * 1024)
+            y, hh = _wave_band(str(raw_file), 1600, 160)
+            run_collect([
+                FFMPEG, "-y", "-hide_banner", "-nostdin", "-i", str(raw_file),
+                "-vf", f"crop=1600:{hh}:0:{y}", str(wave_file),
+            ], 8 * 1024 * 1024)
+            raw_file.unlink(missing_ok=True)
         except Exception:
             pass  # 无音轨 → 无波形
 
