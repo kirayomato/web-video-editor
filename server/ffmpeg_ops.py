@@ -125,7 +125,8 @@ def probe(file_path: str) -> dict:
 def keyframes_near(file_path: str, at: float, window: float = 5.0) -> list:
     start = max(0.0, float(at) - window)
     end = float(at) + window
-    interval = f"{start:.3f}%+{end:.3f}"
+    # read_intervals 绝对区间语法：START%END（均为绝对秒）；%+N 形式是相对偏移，勿混用
+    interval = f"{start:.3f}%{end:.3f}"
     raw = run_collect([
         FFPROBE, "-v", "error",
         "-select_streams", "v:0",
@@ -191,14 +192,14 @@ def build_command(task: dict) -> dict:
         if task.get("mode") == "precise":
             out_path = _out_path(task["path"], "trim_precise", ".mp4")
             steps.append(g + [
-                "-ss", ff_time(start), "-t", ff_time(dur), "-i", task["path"],
+                "-ss", ff_time(start), "-i", task["path"], "-t", ff_time(dur),
                 "-c:v", "libx264", "-crf", str(task.get("crf", 18)), "-preset", task.get("preset") or "veryfast",
                 "-c:a", "copy", "-movflags", "+faststart", out_path,
             ])
         else:
             out_path = _out_path(task["path"], "trim", ".mp4")
             steps.append(g + [
-                "-ss", ff_time(start), "-t", ff_time(dur), "-i", task["path"],
+                "-ss", ff_time(start), "-i", task["path"], "-t", ff_time(dur),
                 "-c", "copy", "-avoid_negative_ts", "make_zero", out_path,
             ])
 
@@ -218,13 +219,13 @@ def build_command(task: dict) -> dict:
             seg = _temp_file(f"seg{i}", ".mp4")
             if task.get("mode") == "precise":
                 steps.append(g + [
-                    "-ss", ff_time(s), "-t", ff_time(e - s), "-i", task["path"],
+                    "-ss", ff_time(s), "-i", task["path"], "-t", ff_time(e - s),
                     "-c:v", "libx264", "-crf", str(task.get("crf", 18)), "-preset", task.get("preset") or "veryfast",
                     "-c:a", "copy", seg,
                 ])
             else:
                 steps.append(g + [
-                    "-ss", ff_time(s), "-t", ff_time(e - s), "-i", task["path"],
+                    "-ss", ff_time(s), "-i", task["path"], "-t", ff_time(e - s),
                     "-c", "copy", "-avoid_negative_ts", "make_zero", seg,
                 ])
             seg_files.append(seg)
@@ -398,7 +399,7 @@ def build_timeline_assets(file_path: str, duration: float) -> dict:
         try:
             run_collect([
                 FFMPEG, "-y", "-hide_banner", "-nostdin", "-i", file_path,
-                "-filter_complex", "aformat=channel_fmts=mono,showwavespic=s=1600x120:colors=#378ADD",
+                "-filter_complex", "showwavespic=s=1600x120:colors=#378ADD",
                 "-frames:v", "1", str(wave_file),
             ], 8 * 1024 * 1024)
         except Exception:

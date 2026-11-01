@@ -72,8 +72,7 @@ class TaskStore:
         return self.snapshot(tid)
 
     def get(self, tid: str):
-        with self.lock:
-            return self.snapshot(tid) if tid in self.tasks else None
+        return self.snapshot(tid)
 
     def list(self) -> list:
         with self.lock:

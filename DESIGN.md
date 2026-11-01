@@ -127,10 +127,11 @@ ffmpeg / ffprobe（系统安装 或 ffmpeg-static 自带）
 
 ```bash
 # 无损截取（关键帧对齐，-ss 在 -i 前，秒级完成）
-ffmpeg -ss {start} -to {end} -i input.mp4 -c copy -avoid_negative_ts make_zero out.mp4
+# 注意：无损输出区间 = [对齐后的关键帧入点, 出点]，可能略长于所选区间（LosslessCut 同款语义）
+ffmpeg -ss {start} -i input.mp4 -t {dur} -c copy -avoid_negative_ts make_zero out.mp4
 
-# 精确截取（-ss 在 -i 后，帧精确，视频重编码 + 音频直拷）
-ffmpeg -i input.mp4 -ss {start} -to {end} -c:v libx264 -crf 18 -preset veryfast -c:a copy out.mp4
+# 精确截取（帧精确；-ss 在输入侧走 accurate_seek，跳过部分解码丢弃，比 -ss 后置快）
+ffmpeg -ss {start} -i input.mp4 -t {dur} -c:v libx264 -crf 18 -preset veryfast -c:a copy out.mp4
 
 # 拼接（concat demuxer，要求同编码参数；不满足时统一转码拼接）
 ffmpeg -f concat -safe 0 -i list.txt -c copy out.mp4
