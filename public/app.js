@@ -54,8 +54,18 @@
     return data;
   }
 
+  // 清洗粘贴路径：去空白/BOM/成对引号（Windows「复制为路径」自带引号）
+  function cleanPath(s) {
+    s = (s || '').replace(/^\uFEFF/, '').trim();
+    while (s.length >= 2 && s[0] === s[s.length - 1] && '"\'“”‘’«»'.includes(s[0])) {
+      s = s.slice(1, -1).trim();
+    }
+    return s.replace(/^["'“”‘’«»]+|["'“”‘’«»]+$/g, '');
+  }
+
   // ---------------- 加载文件 ----------------
   async function loadFromPath(path, name) {
+    path = cleanPath(path);
     status('探测媒体信息…');
     try {
       const info = await api('/api/probe?path=' + encodeURIComponent(path));
@@ -312,7 +322,7 @@
         };
       }
       case 'concat': {
-        const paths = $('concatPaths').value.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+        const paths = $('concatPaths').value.split(/\r?\n/).map(cleanPath).filter(Boolean);
         return {
           type: 'concat',
           paths,
@@ -521,7 +531,7 @@
   function bindUI() {
     $('fileInput').addEventListener('change', (e) => handleFile(e.target.files[0]));
     $('loadPathBtn').addEventListener('click', () => {
-      const p = $('pathInput').value.trim();
+      const p = cleanPath($('pathInput').value);
       if (!p) return err('请输入文件路径');
       loadFromPath(p);
     });

@@ -30,6 +30,38 @@ def _popen_flags():
     return {"creationflags": CREATE_NO_WINDOW} if IS_WIN else {}
 
 
+_QUOTE_CHARS = "\"'“”‘’«»"
+
+
+def clean_path_str(p) -> str:
+    """清洗用户粘贴的路径：去空白/BOM/成对引号。
+
+    Windows 资源管理器「复制为路径」会带一对双引号，直接当相对路径
+    拼上工作目录会产生含引号的非法路径（Invalid argument）。
+    """
+    if p is None:
+        return ""
+    s = str(p).strip().lstrip("\ufeff").strip()
+    while len(s) >= 2 and s[0] == s[-1] and s[0] in _QUOTE_CHARS:
+        s = s[1:-1].strip()
+    # 兜底：残缺/不配对的引号（Windows 文件名不允许包含 "，首尾 ' 也极罕见）
+    s = s.strip(_QUOTE_CHARS)
+    return s
+
+
+def assert_local_path(p, *, must_exist: bool = True) -> str:
+    """清洗并规范化为绝对路径；默认要求文件存在，错误信息可读。"""
+    s = clean_path_str(p)
+    if not s:
+        raise ValueError("缺少路径参数")
+    if "\x00" in s or '"' in s:
+        raise ValueError("路径含非法字符")
+    s = os.path.normpath(os.path.abspath(s))
+    if must_exist and not os.path.isfile(s):
+        raise ValueError(f"文件不存在：{s}")
+    return s
+
+
 def parse_fps(rate):
     if not rate or rate == "0/0":
         return None
@@ -202,8 +234,13 @@ def build_command(task: dict) -> dict:
         dur = end - start
         if task.get("mode") == "precise":
             out_path = _out_path(task["path"], "trim_precise", ".mp4")
+            # 输入侧粗跳（快速）+ 输出侧精修（精确）。
+            # 不能只用输入侧 -ss：音频 copy 无法解码丢包，mov demuxer seek 会带
+            # 约 1s 负时间戳前摇进输出（内容错位并污染 concat）；输出侧 -ss/-t
+            # 按时间戳丢弃，保证音频 copy 也精确。
+            pre = max(0.0, start - 2.0)
             steps.append(g + [
-                "-ss", ff_time(start), "-i", task["path"], "-t", ff_time(dur),
+                "-ss", ff_time(pre), "-i", task["path"], "-ss", ff_time(start - pre), "-t", ff_time(dur),
                 "-c:v", "libx264", "-crf", str(task.get("crf", 18)), "-preset", task.get("preset") or "veryfast",
                 "-c:a", "copy", "-movflags", "+faststart", out_path,
             ])
@@ -229,8 +266,10 @@ def build_command(task: dict) -> dict:
         for i, (s, e) in enumerate(segs):
             seg = _temp_file(f"seg{i}", ".mp4")
             if task.get("mode") == "precise":
+                # 同 trim 精确：输入侧粗跳 + 输出侧精修，避免音频 copy 负时间戳前摇
+                pre = max(0.0, s - 2.0)
                 steps.append(g + [
-                    "-ss", ff_time(s), "-i", task["path"], "-t", ff_time(e - s),
+                    "-ss", ff_time(pre), "-i", task["path"], "-ss", ff_time(s - pre), "-t", ff_time(e - s),
                     "-c:v", "libx264", "-crf", str(task.get("crf", 18)), "-preset", task.get("preset") or "veryfast",
                     "-c:a", "copy", seg,
                 ])

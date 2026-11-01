@@ -2,8 +2,11 @@
 """端到端冒烟测试：覆盖 probe/keyframes/timeline/dryRun/各类任务/下载/Range。"""
 import json
 import os
+import shutil
+import subprocess
 import sys
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -52,6 +55,16 @@ def wait_task(tid, timeout=120):
     return t
 
 
+def first_packet_pts(file, stream="a:0"):
+    """音频首包时间戳（回归：输入侧 -ss + copy 会带负时间戳前摇）。"""
+    out = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", stream,
+         "-show_entries", "packet=pts_time", "-of", "csv=p=0", file],
+        capture_output=True, text=True,
+    ).stdout.split()
+    return float(out[0]) if out else None
+
+
 def main():
     enc = urllib.parse.quote(SAMPLE)
 
@@ -96,6 +109,8 @@ def main():
         info = get(f"/api/probe?path={urllib.parse.quote(r['outPath'])}")
         dur = info.get("duration") or 0
         check("精确输出时长≈3s", 2.7 <= dur <= 3.3, f"{dur:.2f}s")
+        pts = first_packet_pts(r["outPath"])
+        check("精确截取音频无负时间戳前摇", pts is not None and pts >= -0.05, f"first_pts={pts}")
 
     # 6. cut-middle
     t = post("/api/tasks", {"type": "cut-middle", "path": SAMPLE, "in": 3, "out": 5, "duration": 10, "mode": "precise"})
@@ -173,6 +188,24 @@ def main():
     check("app.js 可访问", len(appjs) > 5000, f"{len(appjs)} bytes")
     vendor = get("/vendor/artplayer.js", raw=True)
     check("vendor artplayer 可访问", len(vendor) > 100000, f"{len(vendor)} bytes")
+
+    # 14. 路径清洗（Windows「复制为路径」带引号；中文+空格文件名）
+    sp = os.path.join(ROOT, "tmp", "测试 video.mp4")
+    if not os.path.isfile(sp):
+        shutil.copyfile(SAMPLE, sp)
+    norm = lambda p: os.path.normcase(os.path.normpath(p or ""))
+    info = get(f"/api/probe?path={urllib.parse.quote('\"' + sp + '\"')}")
+    check("双引号路径可载入", norm(info.get("path")) == norm(sp), info.get("path"))
+    info = get(f"/api/probe?path={urllib.parse.quote(chr(39) + sp + chr(39))}")
+    check("单引号路径可载入", norm(info.get("path")) == norm(sp))
+    err = ""
+    try:
+        get("/api/probe?path=" + urllib.parse.quote('"Z:\\no_such_dir\\x.mp4"'))
+    except urllib.error.HTTPError as e:
+        err = json.loads(e.read().decode("utf-8") or "{}").get("error", "")
+    check("不存在文件报「文件不存在」", "不存在" in err, err[:80])
+    t = post("/api/tasks", {"type": "trim", "path": '"' + SAMPLE + '"', "start": 1, "end": 2, "mode": "lossless", "dryRun": True})
+    check("任务提交同样清洗路径", "-c copy" in (t.get("command") or ""), (t.get("command") or "")[:60])
 
     print(f"\n===== 结果: PASS={PASS} FAIL={FAIL} =====")
     return 1 if FAIL else 0

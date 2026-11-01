@@ -8,7 +8,7 @@ import time
 import uuid
 from pathlib import Path
 
-from ffmpeg_ops import build_command, probe, StepRunner
+from ffmpeg_ops import assert_local_path, build_command, probe, StepRunner
 
 
 class TaskStore:
@@ -137,12 +137,16 @@ class TaskStore:
 
     @staticmethod
     def _validate(task: dict):
-        if task.get("type") in ("trim", "cut-middle", "audio", "frame", "transcode") and not task.get("path"):
-            raise ValueError("缺少文件路径 path")
+        # 清洗并规范化路径（兼容带引号粘贴），同时要求文件存在
+        if task.get("type") in ("trim", "cut-middle", "audio", "frame", "transcode"):
+            if not task.get("path"):
+                raise ValueError("缺少文件路径 path")
+            task["path"] = assert_local_path(task["path"])
         if task.get("type") == "concat":
             paths = task.get("paths")
             if not isinstance(paths, list) or len(paths) < 2:
                 raise ValueError("拼接需要 paths 数组（至少 2 个）")
+            task["paths"] = [assert_local_path(p) for p in paths]
 
     @staticmethod
     def _label(task: dict) -> str:

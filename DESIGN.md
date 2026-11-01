@@ -130,8 +130,11 @@ ffmpeg / ffprobe（系统安装 或 ffmpeg-static 自带）
 # 注意：无损输出区间 = [对齐后的关键帧入点, 出点]，可能略长于所选区间（LosslessCut 同款语义）
 ffmpeg -ss {start} -i input.mp4 -t {dur} -c copy -avoid_negative_ts make_zero out.mp4
 
-# 精确截取（帧精确；-ss 在输入侧走 accurate_seek，跳过部分解码丢弃，比 -ss 后置快）
-ffmpeg -ss {start} -i input.mp4 -t {dur} -c:v libx264 -crf 18 -preset veryfast -c:a copy out.mp4
+# 精确截取（帧精确；视频重编码 + 音频 stream copy）
+# 输入侧粗跳 2s（快）+ 输出侧 -ss/-t 精修（准）。
+# 注意：不能只用输入侧 -ss——音频 copy 无法解码丢包，mov demuxer seek 会带约 1s
+# 负时间戳前摇进输出（音频内容错位并污染后续拼接）；输出侧 -ss/-t 按时间戳丢弃才精确。
+ffmpeg -ss {max(0,start-2)} -i input.mp4 -ss {start-max(0,start-2)} -t {dur} -c:v libx264 -crf 18 -preset veryfast -c:a copy out.mp4
 
 # 拼接（concat demuxer，要求同编码参数；不满足时统一转码拼接）
 ffmpeg -f concat -safe 0 -i list.txt -c copy out.mp4

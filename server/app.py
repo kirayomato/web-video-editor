@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from ffmpeg_ops import (  # noqa: E402
     CACHE_DIR, FFMPEG, FFPROBE, OUT_DIR, UPLOAD_DIR,
-    build_timeline_assets, ffmpeg_version, keyframes_near, probe,
+    assert_local_path, build_timeline_assets, ffmpeg_version, keyframes_near, probe,
 )
 from tasks import store  # noqa: E402
 
@@ -47,14 +47,6 @@ MIME = {
     ".mkv": "video/x-matroska",
     ".txt": "text/plain; charset=utf-8",
 }
-
-
-def assert_local_path(p: str | None) -> str:
-    if not p:
-        raise ValueError("缺少路径参数")
-    if "\x00" in p:
-        raise ValueError("非法路径")
-    return os.path.abspath(p)
 
 
 def file_stat(p: str):
