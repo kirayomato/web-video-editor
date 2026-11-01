@@ -166,6 +166,17 @@ def _temp_file(prefix: str, ext: str) -> str:
     return str(CACHE_DIR / f"{prefix}_{os.urandom(6).hex()}{ext}")
 
 
+_AUDIO_EXT = {
+    "aac": ".m4a", "mp3": ".mp3", "opus": ".opus", "vorbis": ".ogg",
+    "flac": ".flac", "ac3": ".ac3", "eac3": ".eac3", "wmav2": ".wma", "pcm_s16le": ".wav",
+}
+
+
+def _audio_ext(codec) -> str:
+    """音频直拷时按源编码选择容器扩展名。"""
+    return _AUDIO_EXT.get((codec or "").lower(), ".m4a")
+
+
 def _concat_list(paths) -> str:
     file = _temp_file("concat", ".txt")
     lines = []
@@ -241,10 +252,11 @@ def build_command(task: dict) -> dict:
         lst = _concat_list(paths)
         if task.get("mode") == "transcode":
             out_path = _out_path(paths[0], "concat_tc", ".mp4")
+            # 视频统一转码，音频一律 stream copy
             steps.append(g + [
                 "-f", "concat", "-safe", "0", "-i", lst,
                 "-c:v", "libx264", "-crf", str(task.get("crf", 20)), "-preset", task.get("preset") or "medium",
-                "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", out_path,
+                "-c:a", "copy", "-movflags", "+faststart", out_path,
             ])
         else:
             out_path = _out_path(paths[0], "concat", ".mp4")
@@ -253,12 +265,10 @@ def build_command(task: dict) -> dict:
 
     elif t == "audio":
         if task.get("action") == "extract":
-            fmt = "mp3" if task.get("format") == "mp3" else "m4a"
-            out_path = _out_path(task["path"], "audio", f".{fmt}")
-            if fmt == "mp3":
-                steps.append(g + ["-i", task["path"], "-vn", "-c:a", "libmp3lame", "-q:a", "2", out_path])
-            else:
-                steps.append(g + ["-i", task["path"], "-vn", "-c:a", "copy", out_path])
+            # 音频一律 stream copy，容器按源编码选择
+            ext = _audio_ext(task.get("_audio_codec"))
+            out_path = _out_path(task["path"], "audio", ext)
+            steps.append(g + ["-i", task["path"], "-vn", "-c:a", "copy", out_path])
         else:
             out_path = _out_path(task["path"], "noaudio", ".mp4")
             steps.append(g + ["-i", task["path"], "-c:v", "copy", "-an", out_path])
@@ -275,12 +285,12 @@ def build_command(task: dict) -> dict:
         args = g + ["-i", task["path"]]
         if task.get("scale"):
             args += ["-vf", f"scale=-2:{int(task['scale'])}"]
+        # 视频重编码，音频一律 stream copy
         if fmt == "webm":
-            args += ["-c:v", "libvpx-vp9", "-crf", str(task.get("crf", 32)), "-b:v", "0",
-                     "-c:a", "libopus", "-b:a", "128k"]
+            args += ["-c:v", "libvpx-vp9", "-crf", str(task.get("crf", 32)), "-b:v", "0", "-c:a", "copy"]
         else:
             args += ["-c:v", "libx264", "-crf", str(task.get("crf", 23)), "-preset", task.get("preset") or "medium",
-                     "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart"]
+                     "-c:a", "copy", "-movflags", "+faststart"]
         args.append(out_path)
         steps.append(args)
 

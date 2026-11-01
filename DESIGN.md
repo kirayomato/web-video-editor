@@ -144,7 +144,8 @@ ffmpeg -i in.mp4 -c:v copy -an out.mp4
 ffmpeg -ss {t} -i in.mp4 -frames:v 1 -q:v 2 out.jpg
 
 # 转格式/压缩
-ffmpeg -i in.mp4 -c:v libx264 -crf 23 -preset medium -c:a aac -b:a 128k out.mp4
+# 转格式/压缩（视频重编码；音频一律 stream copy）
+ffmpeg -i in.mp4 -c:v libx264 -crf 23 -preset medium -c:a copy out.mp4
 ```
 
 **关键工程点：**

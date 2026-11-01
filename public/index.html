@@ -114,11 +114,11 @@
         <div class="op-form" data-op="audio">
           <label>操作
             <select id="audioAction">
-              <option value="extract_m4a">提取音轨（m4a，无损）</option>
-              <option value="extract_mp3">提取音轨（mp3，转码）</option>
+              <option value="extract">提取音轨（stream copy 无损，容器随源编码）</option>
               <option value="remove">去除音轨（保留视频）</option>
             </select>
           </label>
+          <p class="hint">音频始终 stream copy，不做任何重编码。</p>
         </div>
 
         <div class="op-form" data-op="frame">
@@ -152,7 +152,7 @@
               </select>
             </label>
           </div>
-          <p class="hint">CRF 越小画质越高、体积越大（x264 常用 18–28）。</p>
+          <p class="hint">CRF 越小画质越高、体积越大（x264 常用 18–28）。音频始终 stream copy 不重编码。</p>
         </div>
 
         <div class="op-actions">

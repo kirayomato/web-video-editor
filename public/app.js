@@ -321,9 +321,9 @@
         };
       }
       case 'audio': {
-        const v = $('audioAction').value; // extract_m4a | extract_mp3 | remove
+        const v = $('audioAction').value; // extract | remove
         if (v === 'remove') return { type: 'audio', path: state.path, action: 'remove' };
-        return { type: 'audio', path: state.path, action: 'extract', format: v.endsWith('mp3') ? 'mp3' : 'm4a' };
+        return { type: 'audio', path: state.path, action: 'extract' };
       }
       case 'frame': {
         return { type: 'frame', path: state.path, time: currentTime(), format: $('frameFormat').value };

@@ -106,10 +106,14 @@ def main():
         dur = info.get("duration") or 0
         check("cut-middle 输出≈8s", 7.5 <= dur <= 8.3, f"{dur:.2f}s")
 
-    # 7. audio extract / remove
-    t = post("/api/tasks", {"type": "audio", "path": SAMPLE, "action": "extract", "format": "mp3"})
+    # 7. audio extract / remove（音频一律 stream copy）
+    t = post("/api/tasks", {"type": "audio", "path": SAMPLE, "action": "extract"})
     r = wait_task(t["id"])
-    check("提取音轨 mp3", r["status"] == "done", f"err={r.get('error')}")
+    check("提取音轨 copy", r["status"] == "done", f"err={r.get('error')}")
+    if r["status"] == "done":
+        info = get(f"/api/probe?path={urllib.parse.quote(r['outPath'])}")
+        codec = (info.get("audio") or {}).get("codec_name")
+        check("提取音轨编码保持 aac（未转码）", codec == "aac", f"codec={codec}")
     t = post("/api/tasks", {"type": "audio", "path": SAMPLE, "action": "remove"})
     r = wait_task(t["id"])
     check("去除音轨", r["status"] == "done", f"err={r.get('error')}")

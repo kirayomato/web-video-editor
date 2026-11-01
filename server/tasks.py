@@ -33,6 +33,8 @@ class TaskStore:
                 duration = info.get("duration")
                 if task["type"] == "cut-middle" and not task.get("duration"):
                     task["duration"] = duration
+                if task["type"] == "audio" and task.get("action") == "extract" and info.get("audio"):
+                    task["_audio_codec"] = info["audio"].get("codec_name")
             except Exception as e:
                 raise RuntimeError(f"ffprobe 失败: {e}") from e
         elif task["type"] == "cut-middle" and not task.get("duration"):
