@@ -109,7 +109,7 @@
 └── 任务列表：进度（SSE）、产物下载
         │  HTTP（REST + SSE）
         ▼
-本地服务（Node.js + Fastify）
+本地服务（Python http.server）
 ├── /api/probe        ffprobe 元数据 + 关键帧列表
 ├── /api/tasks        创建剪辑任务（trim / concat / audio / frame / transcode）
 ├── /api/tasks/:id/events   SSE 推送 ffmpeg -progress
@@ -160,7 +160,7 @@ ffmpeg -i in.mp4 -c:v libx264 -crf 23 -preset medium -c:a aac -b:a 128k out.mp4
 | 播放器 | **ArtPlayer 5.x**（MIT） | 自定义控制/进度条高亮标记/倍速/逐帧均支持，vendor 静态引入 |
 | 前端 | 原生 JS + CSS（无构建步骤） | 零依赖，`node server.js` 即可运行，无需 npm install |
 | 波形/缩略图 | ffmpeg 生成（showwavespic / tile sprite） | 不依赖第三方前端库 |
-| 后端 | 纯 Node `http`（零依赖） | 静态服务、Range 流式播放、SSE、上传 |
+| 后端 | **Python 3 标准库**（http.server + subprocess，零第三方依赖） | `python server/app.py` 直接运行，无需 pip install |
 | ffmpeg 调度 | 手写 `child_process.spawn`（参数数组，不经 shell） | 参数完全可控，便于命令预览 |
 | ffmpeg 来源 | 系统 PATH 优先（本机 7.1.1 gyan full build），`FFMPEG_PATH`/`FFPROBE_PATH` 可覆盖 | 免安装体验 |
 | 可选打包 | Tauri / Electron | 后续变桌面应用，不在 MVP |
@@ -182,7 +182,7 @@ ffmpeg -i in.mp4 -c:v libx264 -crf 23 -preset medium -c:a aac -b:a 128k out.mp4
 2. **播放器**：✅ ArtPlayer 5.x
 3. **网页下载**：✅ 支持剪辑产物下载 + 原视频下载
 4. **ffmpeg 来源**：系统 PATH 优先（本机已有 7.1.1），环境变量可覆盖
-5. **实现约束**：零 npm 依赖、无构建步骤（免安装直接 `node server/index.js`）；代码开发过程中按主题自动 git 提交
+5. **实现约束**：零第三方依赖、无构建步骤（免安装直接 `python server/app.py`）；代码开发过程中按主题自动 git 提交；后端使用 Python（用户偏好）
 6. **MVP 功能**：按第二节列表执行
 
 ### 实现分期（更新）
