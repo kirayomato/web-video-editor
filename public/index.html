@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>网页视频剪辑器</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <h1>网页视频剪辑器</h1>
+      <span class="health" id="healthInfo">检测中…</span>
+    </div>
+    <div class="open-actions">
+      <label class="btn">选择视频文件<input type="file" id="fileInput" accept="video/*,audio/*" hidden></label>
+      <span class="divider">或</span>
+      <input type="text" id="pathInput" class="path-input" placeholder="本地文件绝对路径，例如 D:\videos\demo.mp4" spellcheck="false">
+      <button class="btn primary" id="loadPathBtn">从路径载入</button>
+      <button class="btn" id="downloadSourceBtn" disabled>下载视频</button>
+    </div>
+    <div class="statusbar" id="statusBar">就绪。可拖拽文件到页面，或用路径直接载入（大文件推荐路径方式，无需复制）。</div>
+  </header>
+
+  <main>
+    <section class="panel player-panel">
+      <div id="artplayer" class="player-box"></div>
+    </section>
+
+    <section class="panel timeline-panel">
+      <div class="timeline" id="timeline" title="点击定位；拖动两端手柄调整入出点">
+        <div class="tl-thumbs" id="tlThumbs"></div>
+        <div class="tl-wave" id="tlWave"></div>
+        <div class="tl-selection" id="tlSelection"></div>
+        <div class="tl-handle in" id="handleIn" title="入点"></div>
+        <div class="tl-handle out" id="handleOut" title="出点"></div>
+        <div class="tl-head" id="tlHead"></div>
+      </div>
+      <div class="timeline-controls">
+        <button class="btn small" id="markInBtn">设入点 (I)</button>
+        <button class="btn small" id="markOutBtn">设出点 (O)</button>
+        <label>入点 <input type="number" id="inTime" step="0.01" min="0" value="0"> s</label>
+        <label>出点 <input type="number" id="outTime" step="0.01" min="0" value="0"> s</label>
+        <span class="meta" id="rangeInfo">未选择区间</span>
+        <span class="meta" id="timeInfo">00:00.00 / 00:00.00</span>
+        <span class="meta" id="keyframeInfo"></span>
+      </div>
+    </section>
+
+    <section class="row">
+      <section class="panel ops-panel">
+        <h2>剪辑操作</h2>
+        <div class="tabs" id="opTabs">
+          <button class="tab active" data-op="trim">截取片段</button>
+          <button class="tab" data-op="cut-middle">删除中间</button>
+          <button class="tab" data-op="concat">拼接</button>
+          <button class="tab" data-op="audio">音频</button>
+          <button class="tab" data-op="frame">截帧</button>
+          <button class="tab" data-op="transcode">转码</button>
+        </div>
+
+        <div class="op-form active" data-op="trim">
+          <label>切割模式
+            <select id="trimMode">
+              <option value="lossless">无损快切（关键帧对齐 · 秒级 · 不损画质）</option>
+              <option value="precise">精确切（重编码 · 帧精确）</option>
+            </select>
+          </label>
+          <div class="inline-fields" id="trimEncodeFields">
+            <label>CRF <input type="number" id="trimCrf" value="18" min="0" max="51"></label>
+            <label>预设
+              <select id="trimPreset">
+                <option>ultrafast</option><option selected>veryfast</option>
+                <option>faster</option><option>fast</option><option>medium</option>
+              </select>
+            </label>
+          </div>
+          <p class="hint">按当前入点 / 出点截取。无损模式：切点自动对齐最近关键帧，输出区间为 [对齐入点, 出点]，因此可能略长于所选区间。</p>
+        </div>
+
+        <div class="op-form" data-op="cut-middle">
+          <label>切割模式
+            <select id="cutMode">
+              <option value="lossless">无损（快，切点对齐关键帧）</option>
+              <option value="precise">精确（重编码）</option>
+            </select>
+          </label>
+          <div class="inline-fields">
+            <label>CRF <input type="number" id="cutCrf" value="18" min="0" max="51"></label>
+            <label>预设
+              <select id="cutPreset">
+                <option>ultrafast</option><option selected>veryfast</option>
+                <option>faster</option><option>fast</option><option>medium</option>
+              </select>
+            </label>
+          </div>
+          <p class="hint">删除入点 ~ 出点之间的内容，保留前后两段并自动拼接。</p>
+        </div>
+
+        <div class="op-form" data-op="concat">
+          <textarea id="concatPaths" rows="4" placeholder="每行一个文件绝对路径（至少 2 个）" spellcheck="false"></textarea>
+          <div class="inline-fields">
+            <button class="btn small" id="addCurrentToConcat">加入当前文件</button>
+            <label>方式
+              <select id="concatMode">
+                <option value="lossless">无损拼接（需编码参数一致）</option>
+                <option value="transcode">统一转码拼接（慢，兼容性好）</option>
+              </select>
+            </label>
+            <label>CRF <input type="number" id="concatCrf" value="20" min="0" max="51"></label>
+          </div>
+        </div>
+
+        <div class="op-form" data-op="audio">
+          <label>操作
+            <select id="audioAction">
+              <option value="extract_m4a">提取音轨（m4a，无损）</option>
+              <option value="extract_mp3">提取音轨（mp3，转码）</option>
+              <option value="remove">去除音轨（保留视频）</option>
+            </select>
+          </label>
+        </div>
+
+        <div class="op-form" data-op="frame">
+          <div class="inline-fields">
+            <label>格式
+              <select id="frameFormat"><option value="jpg">JPG</option><option value="png">PNG</option></select>
+            </label>
+            <span class="meta">截取当前播放位置：<strong id="frameTime">00:00.00</strong></span>
+          </div>
+          <p class="hint">导出当前播放头所在时间点的单帧图片。</p>
+        </div>
+
+        <div class="op-form" data-op="transcode">
+          <div class="inline-fields">
+            <label>格式
+              <select id="tcFormat"><option value="mp4">MP4 (H.264 + AAC)</option><option value="webm">WebM (VP9 + Opus)</option></select>
+            </label>
+            <label>CRF <input type="number" id="tcCrf" value="23" min="0" max="51"></label>
+            <label>预设
+              <select id="tcPreset">
+                <option>ultrafast</option><option>veryfast</option><option>faster</option>
+                <option>fast</option><option selected>medium</option><option>slow</option>
+              </select>
+            </label>
+            <label>高度
+              <select id="tcScale">
+                <option value="">原分辨率</option>
+                <option value="480">480p</option>
+                <option value="720">720p</option>
+                <option value="1080">1080p</option>
+              </select>
+            </label>
+          </div>
+          <p class="hint">CRF 越小画质越高、体积越大（x264 常用 18–28）。</p>
+        </div>
+
+        <div class="op-actions">
+          <button class="btn" id="previewCmdBtn">预览命令</button>
+          <button class="btn primary" id="runBtn">执行</button>
+        </div>
+        <pre class="cmd-preview" id="cmdPreview" hidden></pre>
+      </section>
+
+      <section class="panel info-panel">
+        <h2>媒体信息</h2>
+        <div id="mediaInfo" class="media-info"><p class="hint">未加载文件</p></div>
+      </section>
+    </section>
+
+    <section class="panel tasks-panel">
+      <h2>任务列表 <button class="btn small" id="refreshTasksBtn">刷新</button></h2>
+      <div id="taskList"><p class="hint">暂无任务</p></div>
+    </section>
+  </main>
+
+  <script src="/vendor/artplayer.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>
