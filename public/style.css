@@ -96,7 +96,7 @@ main {
 
 .timeline {
   position: relative;
-  height: 84px;
+  height: 72px;
   border: 1px solid var(--border);
   border-radius: 8px;
   overflow: hidden;
@@ -105,25 +105,9 @@ main {
   user-select: none;
 }
 
-.tl-thumbs {
-  position: absolute;
-  inset: 0 0 28px 0;
-  display: flex;
-}
-.tl-thumb {
-  flex: 1;
-  background-size: 2400% 100%;
-  background-repeat: no-repeat;
-  border-right: 1px solid rgba(255, 255, 255, 0.08);
-  opacity: 0.85;
-}
-
 .tl-wave {
   position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  height: 28px;
+  inset: 0;
   background-color: #1a222c;
   background-size: 100% 100%;
   background-repeat: no-repeat;

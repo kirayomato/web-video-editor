@@ -231,8 +231,7 @@ class Handler(BaseHTTPRequestHandler):
         if p == "/api/timeline" and method == "GET":
             try:
                 file_path = assert_local_path(q.get("path"))
-                duration = float(q.get("duration") or 0)
-                return self._json(200, build_timeline_assets(file_path, duration))
+                return self._json(200, build_timeline_assets(file_path))
             except Exception as e:
                 return self._error(400, str(e))
 

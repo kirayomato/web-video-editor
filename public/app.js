@@ -112,19 +112,9 @@
   async function loadTimelineAssets(path, duration) {
     try {
       const assets = await api(`/api/timeline?path=${encodeURIComponent(path)}&duration=${duration || 0}`);
-      const thumbs = $('tlThumbs');
-      thumbs.innerHTML = '';
-      if (assets.sprite) {
-        for (let i = 0; i < assets.cols; i++) {
-          const cell = document.createElement('div');
-          cell.className = 'tl-thumb';
-          cell.style.backgroundImage = `url("${assets.sprite}")`;
-          cell.style.backgroundPositionX = `${(i / (assets.cols - 1)) * 100}%`;
-          thumbs.appendChild(cell);
-        }
-      }
       const wave = $('tlWave');
       wave.style.backgroundImage = assets.wave ? `url("${assets.wave}")` : 'none';
+      if (!assets.wave) status('未生成波形（文件可能无音轨），时间线仍可点击跳转');
     } catch (e) {
       status('时间线素材生成失败：' + e.message, 'error');
     }

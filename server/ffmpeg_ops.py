@@ -430,36 +430,25 @@ class StepRunner:
             raise RuntimeError("\n".join(err.splitlines()[-8:]) or f"ffmpeg 退出码 {code}")
 
 
-def build_timeline_assets(file_path: str, duration: float) -> dict:
+def build_timeline_assets(file_path: str) -> dict:
+    """生成时间线波形素材（时间线只显示音频波形；点击跳转由前端处理）。"""
     st = os.stat(file_path)
-    key = hashlib.sha1(f"{file_path}|{st.st_size}|{st.st_mtime}|{duration or 0}".encode()).hexdigest()[:16]
-    sprite_file = CACHE_DIR / f"{key}_sprite.jpg"
+    # wave2：生成参数变更后与旧缓存区分
+    key = hashlib.sha1(f"wave2|{file_path}|{st.st_size}|{st.st_mtime}".encode()).hexdigest()[:16]
     wave_file = CACHE_DIR / f"{key}_wave.png"
-    cols = 24
 
-    if not sprite_file.exists():
-        interval = max(0.1, (float(duration or 10)) / cols)
-        run_collect([
-            FFMPEG, "-y", "-hide_banner", "-nostdin", "-i", file_path,
-            "-vf", f"fps=1/{interval:.4f},scale=160:90,tile={cols}x1",
-            "-frames:v", "1", str(sprite_file),
-        ], 8 * 1024 * 1024)
     if not wave_file.exists():
         try:
             run_collect([
                 FFMPEG, "-y", "-hide_banner", "-nostdin", "-i", file_path,
-                "-filter_complex", "showwavespic=s=1600x120:colors=#378ADD",
+                "-filter_complex", "showwavespic=s=1600x160:colors=#378ADD",
                 "-frames:v", "1", str(wave_file),
             ], 8 * 1024 * 1024)
         except Exception:
             pass  # 无音轨 → 无波形
 
     return {
-        "sprite": f"/api/cache/{sprite_file.name}" if sprite_file.exists() else None,
         "wave": f"/api/cache/{wave_file.name}" if wave_file.exists() else None,
-        "cols": cols,
-        "cellW": 160,
-        "cellH": 90,
     }
 
 

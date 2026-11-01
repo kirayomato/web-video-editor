@@ -75,12 +75,13 @@ def main():
     if frames:
         print("       关键帧样例:", [round(f["time"], 3) for f in frames[:6]])
 
-    # 2. timeline assets
+    # 2. timeline 波形（时间线只显示音频波形）
     tl = get(f"/api/timeline?path={enc}&duration=10")
-    check("timeline sprite", bool(tl.get("sprite")), tl.get("sprite"))
     check("timeline wave", bool(tl.get("wave")), tl.get("wave"))
-    sprite = get(tl["sprite"], raw=True)
-    check("sprite 可访问", len(sprite) > 1000, f"{len(sprite)} bytes")
+    check("timeline 无 sprite（波形 only）", tl.get("sprite") is None, str(tl.keys()))
+    if tl.get("wave"):
+        wave = get(tl["wave"], raw=True)
+        check("wave 可访问", len(wave) > 500, f"{len(wave)} bytes")
 
     # 3. dryRun 命令
     d = post("/api/tasks", {"type": "trim", "path": SAMPLE, "start": 1, "end": 4, "mode": "lossless", "dryRun": True})

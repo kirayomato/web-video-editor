@@ -63,7 +63,7 @@
 **MVP 功能：**
 
 1. **播放**：加载本地视频（拖拽/选择），播放/暂停、逐帧步进、倍速、音量、时间显示
-2. **时间线**：波形 + 缩略图预览，入点/出点标记（I/O 快捷键），缩放
+2. **时间线**：音频波形（点击跳转/拖动扫动定位），入点/出点标记（I/O 快捷键）
 3. **剪辑**（ffmpeg 驱动）：
    - 截取片段（两种模式：**无损快切**（关键帧对齐，秒级）/ **精确切**（重编码，帧精确））
    - 删除中间段（多段保留区间导出）
@@ -104,7 +104,7 @@
 ```
 浏览器（ArtPlayer + 原生 JS，无构建步骤）
 ├── 播放器：ArtPlayer（Blob/Range 流式播放），逐帧/倍速/音量
-├── 时间线：缩略图条（sprite）+ 波形（showwavespic）+ 入出点标记 + 播放头
+├── 时间线：音频波形（showwavespic，点击跳转/拖动扫动）+ 入出点标记 + 播放头
 ├── 剪辑面板：操作选择、无损/精确模式、参数、命令预览
 └── 任务列表：进度（SSE）、产物下载
         │  HTTP（REST + SSE）
@@ -156,7 +156,7 @@ ffmpeg -i in.mp4 -c:v libx264 -crf 23 -preset medium -c:a copy out.mp4
 - **无损/精确双模式**：默认无损快切，UI 上提示"切点将对齐最近关键帧（{time}）"，提供"精确切割"开关（借鉴 LosslessCut）。
 - **进度**：spawn 时加 `-progress pipe:1`，解析 `out_time_ms` 映射百分比，经 SSE 推前端。
 - **命令透明**：所有任务展示完整 ffmpeg 命令，可复制到终端复跑——既是调试利器也符合"用 ffmpeg 剪辑"的定位。
-- **缩略图/波形**：一次性预处理 `ffmpeg -i in -vf fps=1,scale=160:-1 thumb_%04d.jpg` + 音频 PCM 提取喂 peaks.js，产物缓存。
+- **波形**：一次性预处理 `ffmpeg -filter_complex showwavespic=s=1600x160` 生成波形图，产物缓存；时间线只显示波形，点击跳转、拖动扫动由前端映射时间轴。
 
 ### 3.3 技术栈
 
@@ -164,7 +164,7 @@ ffmpeg -i in.mp4 -c:v libx264 -crf 23 -preset medium -c:a copy out.mp4
 |---|---|---|
 | 播放器 | **ArtPlayer 5.x**（MIT） | 自定义控制/进度条高亮标记/倍速/逐帧均支持，vendor 静态引入 |
 | 前端 | 原生 JS + CSS（无构建步骤） | 零依赖，`node server.js` 即可运行，无需 npm install |
-| 波形/缩略图 | ffmpeg 生成（showwavespic / tile sprite） | 不依赖第三方前端库 |
+| 波形 | ffmpeg 生成（showwavespic） | 时间线只显示音频波形，不依赖第三方前端库 |
 | 后端 | **Python 3 标准库**（http.server + subprocess，零第三方依赖） | `python server/app.py` 直接运行，无需 pip install |
 | ffmpeg 调度 | 手写 `child_process.spawn`（参数数组，不经 shell） | 参数完全可控，便于命令预览 |
 | ffmpeg 来源 | 系统 PATH 优先（本机 7.1.1 gyan full build），`FFMPEG_PATH`/`FFPROBE_PATH` 可覆盖 | 免安装体验 |
@@ -176,7 +176,7 @@ ffmpeg -i in.mp4 -c:v libx264 -crf 23 -preset medium -c:a copy out.mp4
 |---|---|
 | **M1 骨架** | 本地文件加载 + 播放器（逐帧/倍速）+ ffprobe 信息面板 |
 | **M2 剪辑核心** | 入出点、无损截取、精确截取、任务队列 + 进度 + 下载、命令预览 |
-| **M3 完整 MVP** | 删除中间段、拼接、音频提取/去除、截帧、转格式；波形 + 缩略图时间线 |
+| **M3 完整 MVP** | 删除中间段、拼接、音频提取/去除、截帧、转格式；波形时间线（点击跳转） |
 | **M4 打磨** | 快捷键体系、批量任务、ffmpeg 路径设置、错误处理与格式兼容提示 |
 
 ---
@@ -196,5 +196,5 @@ ffmpeg -i in.mp4 -c:v libx264 -crf 23 -preset medium -c:a copy out.mp4
 |---|---|
 | **M1 骨架** | 本地文件加载（路径/拖拽上传）+ ArtPlayer 播放（逐帧/倍速）+ ffprobe 信息面板 |
 | **M2 剪辑核心** | 入出点、无损截取、精确截取、任务队列 + SSE 进度 + 下载、命令预览 |
-| **M3 完整 MVP** | 删除中间段、拼接、音频提取/去除、截帧、转格式；波形 + 缩略图时间线 |
+| **M3 完整 MVP** | 删除中间段、拼接、音频提取/去除、截帧、转格式；波形时间线（点击跳转） |
 | **M4 打磨** | 快捷键体系、批量任务、ffmpeg 路径设置、错误处理与格式兼容提示 |
