@@ -10,6 +10,8 @@
     fps: 30,
     inPoint: 0,
     outPoint: 0,
+    viewStart: 0, // 时间线可见窗口 [viewStart, viewEnd]；0,0 = 全览
+    viewEnd: 0,
     art: null,
     activeOp: 'trim',
     pendingFile: null,
@@ -75,6 +77,8 @@
       state.fps = (info.video && info.video.fps) || 30;
       state.inPoint = 0;
       state.outPoint = state.duration;
+      state.viewStart = 0;
+      state.viewEnd = state.duration;
       $('pathInput').value = info.path;
       renderMediaInfo(info);
       initPlayer(info.path);
@@ -115,6 +119,7 @@
       const wave = $('tlWave');
       wave.style.backgroundImage = assets.wave ? `url("${assets.wave}")` : 'none';
       if (!assets.wave) status('未生成波形（文件可能无音轨），时间线仍可点击跳转');
+      applyWaveView();
     } catch (e) {
       status('时间线素材生成失败：' + e.message, 'error');
     }
@@ -153,6 +158,7 @@
 
     art.on('video:timeupdate', () => {
       updateTimeUI();
+      ensurePlayheadVisible(); // 缩放后播放头离开可见窗口时把窗口拉回
       const t = art.currentTime || 0;
       $('frameTime').textContent = fmtTime(t);
     });
@@ -171,6 +177,7 @@
     // ArtPlayer 5.x：seek 是 setter 属性（art.seek = 秒数），不是方法，调用形式会抛 TypeError
     state.art.seek = v;
     updateTimeUI();
+    ensurePlayheadVisible();
   }
 
   function frameStep(dir) {
@@ -180,9 +187,85 @@
   }
 
   // ---------------- 时间线 ----------------
+  const M = window.TimelineMath;
+
+  // 当前可见窗口（未缩放时 = 整段时长）
+  function view() {
+    const d = state.duration || 0;
+    if (!(d > 0)) return [0, 0];
+    if (!(state.viewEnd > state.viewStart)) return [0, d];
+    return [state.viewStart, state.viewEnd];
+  }
+
   function pctOf(t) {
-    if (!state.duration) return 0;
-    return Math.max(0, Math.min(1, t / state.duration)) * 100;
+    const [vs, ve] = view();
+    return M.timeToPct(t, vs, ve);
+  }
+
+  function applyWaveView() {
+    // 波形图代表整段时长，按可见窗口反向铺放（放大/平移）
+    const [vs, ve] = view();
+    const bg = M.waveBackground(vs, ve, state.duration || 0);
+    const wave = $('tlWave');
+    wave.style.backgroundSize = bg.size;
+    wave.style.backgroundPosition = bg.position;
+    updateViewInfo();
+  }
+
+  function updateViewInfo() {
+    const [vs, ve] = view();
+    const d = state.duration || 0;
+    const el = $('viewInfo');
+    if (!el) return;
+    if (!(d > 0)) { el.textContent = ''; return; }
+    const full = ve - vs >= d - 1e-6;
+    const zoom = (d / Math.max(ve - vs, 1e-6));
+    el.textContent = full
+      ? '视图 全览'
+      : `视图 ${fmtTime(vs)} ~ ${fmtTime(ve)}（${zoom.toFixed(1)}x）`;
+  }
+
+  function setView(vs, ve) {
+    state.viewStart = vs;
+    state.viewEnd = ve;
+    applyWaveView();
+    syncSelectionUI();
+  }
+
+  // 以当前播放位置为中心缩放：可见窗口始终围绕播放位置展开/收缩（贴边时钳制到 [0, duration]）
+  function zoomTimeline(factor) {
+    const d = state.duration;
+    if (!d) return;
+    const [vs, ve] = view();
+    const anchor = currentTime();
+    const minSpan = Math.max(1 / (state.fps || 30), 0.05); // 至少一帧，且不小于 50ms
+    const [ns, ne] = M.zoomAt(vs, ve, d, anchor, 0.5, factor, minSpan);
+    setView(ns, ne);
+  }
+
+  // 横向平移（Shift+滚轮 / 触控板横向滑动）；frac 为窗口宽度比例
+  function panTimeline(frac) {
+    const d = state.duration;
+    if (!d) return;
+    const [vs, ve] = view();
+    const [ns, ne] = M.panView(vs, ve, d, frac);
+    setView(ns, ne);
+  }
+
+  function resetView() {
+    state.viewStart = 0;
+    state.viewEnd = state.duration || 0;
+    applyWaveView();
+    syncSelectionUI();
+  }
+
+  // 播放/跳转导致播放头离开可见窗口时，把窗口拉回（播放头居中）
+  function ensurePlayheadVisible() {
+    const d = state.duration;
+    if (!d) return;
+    const [vs, ve] = view();
+    const [ns, ne] = M.followAnchor(vs, ve, d, currentTime());
+    if (ns !== vs || ne !== ve) setView(ns, ne);
   }
 
   function syncSelectionUI() {
@@ -249,8 +332,9 @@
 
     function timeAt(clientX) {
       const rect = tl.getBoundingClientRect();
-      const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
-      return ratio * (state.duration || 0);
+      const ratio = M.clamp((clientX - rect.left) / rect.width, 0, 1);
+      const [vs, ve] = view();
+      return M.ratioToTime(ratio, vs, ve);
     }
 
     tl.addEventListener('mousedown', (e) => {
@@ -274,6 +358,31 @@
     });
 
     window.addEventListener('mouseup', () => { dragging = null; });
+
+    // 滚轮缩放：以当前播放位置为中心（播放位置在窗口外则拉回居中）
+    // Shift+滚轮 / 触控板横向滑动：平移视图
+    tl.addEventListener('wheel', (e) => {
+      if (!state.duration) return;
+      e.preventDefault();
+      const dx = e.deltaX || 0;
+      const dy = e.deltaY || 0;
+      const horizontal = e.shiftKey || Math.abs(dx) > Math.abs(dy);
+      if (horizontal) {
+        const delta = (e.shiftKey && Math.abs(dx) <= Math.abs(dy)) ? dy : dx;
+        panTimeline(M.clamp(delta * 0.002, -0.5, 0.5));
+      } else {
+        // 向上滚（deltaY < 0）放大；指数映射对触控板/滚轮都平滑
+        const factor = M.clamp(Math.exp(-dy * 0.0025), 0.5, 2);
+        zoomTimeline(factor);
+      }
+    }, { passive: false });
+
+    // 双击时间线空白处：恢复全览
+    tl.addEventListener('dblclick', (e) => {
+      if (!state.duration) return;
+      if (e.target.id === 'handleIn' || e.target.id === 'handleOut') return;
+      resetView();
+    });
   }
 
   // ---------------- 操作面板 ----------------

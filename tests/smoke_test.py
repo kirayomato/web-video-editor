@@ -195,6 +195,11 @@ def main():
     src = appjs.decode("utf-8", "replace")
     check("seek 以属性赋值调用（art.seek = t）", "art.seek =" in src, "缺少 art.seek = 赋值")
     check("seek 未被当方法调用", ".seek(" not in src, "发现 .seek() 方法调用形态")
+    # 时间线滚轮缩放（视图窗口）：核心模块与交互绑定
+    mathjs = get("/timeline_math.js", raw=True)
+    check("timeline_math 可访问", b"zoomAt" in mathjs and b"waveBackground" in mathjs, f"{len(mathjs)} bytes")
+    check("页面引入 timeline_math", "timeline_math.js" in page)
+    check("时间线绑定 wheel 缩放", "addEventListener('wheel'" in src and "zoomTimeline" in src)
 
     # 14. 路径清洗（Windows「复制为路径」带引号；中文+空格文件名）
     sp = os.path.join(ROOT, "tmp", "测试 video.mp4")
@@ -239,6 +244,15 @@ def main():
             capture_output=True).stdout
         ink = sum(1 for yy in range(h) if any(gray[yy * w + xx] > 40 for xx in range(w)))
         check("波形幅度自动填满（≥85% 高）", ink >= h * 0.85, f"{ink}/{h}")
+
+    # 16. 时间线视图数学单元测试（滚轮缩放/平移/播放头跟随/波形铺放）
+    mt = os.path.join(ROOT, "tests", "timeline_math_test.js")
+    node = shutil.which("node")
+    if node and os.path.isfile(mt):
+        r = subprocess.run([node, mt], capture_output=True, text=True)
+        check("timeline_math 单测", r.returncode == 0, (r.stdout + r.stderr).strip().splitlines()[-1] if (r.stdout or r.stderr) else "")
+    else:
+        check("timeline_math 单测", False, "node 或测试文件缺失")
 
     print(f"\n===== 结果: PASS={PASS} FAIL={FAIL} =====")
     return 1 if FAIL else 0

@@ -28,7 +28,7 @@
     </section>
 
     <section class="panel timeline-panel">
-      <div class="timeline" id="timeline" title="点击波形跳转；拖动空白区域扫动定位；拖动两端手柄调整入出点">
+      <div class="timeline" id="timeline" title="滚轮以播放位置为中心缩放（Shift+滚轮平移，双击复位）；点击波形跳转；拖动两端手柄调整入出点">
         <div class="tl-wave" id="tlWave"></div>
         <div class="tl-selection" id="tlSelection"></div>
         <div class="tl-handle in" id="handleIn" title="入点"></div>
@@ -41,6 +41,7 @@
         <label>入点 <input type="number" id="inTime" step="0.01" min="0" value="0"> s</label>
         <label>出点 <input type="number" id="outTime" step="0.01" min="0" value="0"> s</label>
         <span class="meta" id="rangeInfo">未选择区间</span>
+        <span class="meta" id="viewInfo"></span>
         <span class="meta" id="timeInfo">00:00.00 / 00:00.00</span>
         <span class="meta" id="keyframeInfo"></span>
       </div>
@@ -174,6 +175,7 @@
   </main>
 
   <script src="/vendor/artplayer.js"></script>
+  <script src="/timeline_math.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>
