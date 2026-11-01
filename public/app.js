@@ -168,7 +168,8 @@
   function seek(t) {
     if (!state.art) return;
     const v = Math.max(0, Math.min(state.duration || t, t));
-    state.art.seek(v);
+    // ArtPlayer 5.x：seek 是 setter 属性（art.seek = 秒数），不是方法，调用形式会抛 TypeError
+    state.art.seek = v;
     updateTimeUI();
   }
 

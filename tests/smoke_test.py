@@ -190,6 +190,11 @@ def main():
     check("app.js 可访问", len(appjs) > 5000, f"{len(appjs)} bytes")
     vendor = get("/vendor/artplayer.js", raw=True)
     check("vendor artplayer 可访问", len(vendor) > 100000, f"{len(vendor)} bytes")
+    # ArtPlayer 5.x：seek/forward/backward 是 setter 属性（Object.defineProperty 只有 set），
+    # 当方法调用会抛 TypeError（曾导致时间线点击跳转失效）——锁死赋值形态。
+    src = appjs.decode("utf-8", "replace")
+    check("seek 以属性赋值调用（art.seek = t）", "art.seek =" in src, "缺少 art.seek = 赋值")
+    check("seek 未被当方法调用", ".seek(" not in src, "发现 .seek() 方法调用形态")
 
     # 14. 路径清洗（Windows「复制为路径」带引号；中文+空格文件名）
     sp = os.path.join(ROOT, "tmp", "测试 video.mp4")
