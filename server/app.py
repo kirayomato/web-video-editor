@@ -26,7 +26,7 @@ from tasks import store  # noqa: E402
 ROOT = Path(__file__).resolve().parent.parent
 PUBLIC_DIR = ROOT / "public"
 PORT = int(os.environ.get("PORT", "8787"))
-HOST = os.environ.get("HOST", "127.0.0.1")
+HOST = os.environ.get("HOST", "0.0.0.0")
 
 MIME = {
     ".html": "text/html; charset=utf-8",
