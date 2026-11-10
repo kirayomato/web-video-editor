@@ -16,6 +16,7 @@
     activeOp: 'trim',
     pendingFile: null,
     tasks: {},
+    playerEnabled: false, // 是否加载浏览器播放器；默认 false = 仅用 ffmpeg 读元数据
   };
 
   const $ = (id) => document.getElementById(id);
@@ -135,8 +136,10 @@
       status(`⚠ 无法读取媒体信息（${e.message}），但仍可用 ffmpeg 剪辑；请在右侧手动填写入/出点区间。`, 'warn');
     }
 
-    // 始终尝试初始化播放器：能播则播，不能播会在播放器内报错，但不影响剪辑
-    initPlayer(path);
+    // 默认不加载浏览器播放器：仅保留 ffmpeg 元数据，剪辑照常可用。
+    // 用户点过「加载播放器」后（playerEnabled=true）才在换文件时自动加载预览。
+    if (state.playerEnabled) initPlayer(path);
+    else showPlayerPlaceholder();
     syncSelectionUI();
     // 仅在有有效时长时生成时间线波形（读取失败时跳过，避免覆盖上面的警告）
     if (state.duration > 0) loadTimelineAssets(path, state.duration);
@@ -173,6 +176,50 @@
       applyWaveView();
     } catch (e) {
       status('时间线素材生成失败：' + e.message, 'error');
+    }
+  }
+
+  // ---------------- 播放器模式（按需加载） ----------------
+  let placeholderHTML = '';
+
+  // 仅元数据模式：销毁播放器、显示占位。占位节点从 HTML 缓存一次，之后复用。
+  function showPlayerPlaceholder() {
+    const container = $('artplayer');
+    const node = $('playerPlaceholder');
+    if (node && !placeholderHTML) placeholderHTML = node.outerHTML;
+    if (state.art) {
+      try { state.art.destroy(); } catch (_) { /* ignore */ }
+      state.art = null;
+    }
+    container.innerHTML = placeholderHTML || '<div class="player-placeholder"></div>';
+    state.playerEnabled = false;
+    $('loadPlayerBtn').textContent = '加载播放器';
+    $('playerModeHint').textContent = '仅用 ffmpeg 读取元数据，未加载播放器（可正常剪辑）';
+  }
+
+  function loadPlayer() {
+    if (!state.path) return err('请先载入视频文件');
+    if (typeof Artplayer === 'undefined') {
+      return err('ArtPlayer 未加载，请检查 public/vendor/artplayer.js');
+    }
+    try {
+      initPlayer(state.path);
+    } catch (e) {
+      showPlayerPlaceholder();
+      return err('播放器加载失败：' + e.message);
+    }
+    if (!state.art) { showPlayerPlaceholder(); return; }
+    state.playerEnabled = true;
+    $('loadPlayerBtn').textContent = '卸载播放器';
+    $('playerModeHint').textContent = '播放器已加载；点击「卸载播放器」可回到仅元数据模式';
+  }
+
+  function togglePlayer() {
+    if (state.playerEnabled) {
+      showPlayerPlaceholder();
+      status('已卸载播放器，回到仅元数据模式', 'ok');
+    } else {
+      loadPlayer();
     }
   }
 
@@ -367,6 +414,16 @@
     state.outPoint = Math.min(_maxTime(), Math.max(t, state.inPoint + 0.05));
     syncSelectionUI();
     updateKeyframeHint();
+  }
+
+  // 用播放头标记入/出点：仅在加载了播放器时有意义
+  function markFromPlayhead(which) {
+    if (!state.path) return err('请先载入视频文件');
+    if (!state.playerEnabled) {
+      return err('播放器未加载：请在右侧入/出点输入框手动填写秒数');
+    }
+    if (which === 'in') setIn(currentTime());
+    else setOut(currentTime());
   }
 
   let kfTimer = null;
@@ -704,8 +761,8 @@
           if (state.art.playing) state.art.pause();
           else state.art.play();
           break;
-        case 'i': case 'I': if (state.path) setIn(currentTime()); break;
-        case 'o': case 'O': if (state.path) setOut(currentTime()); break;
+        case 'i': case 'I': markFromPlayhead('in'); break;
+        case 'o': case 'O': markFromPlayhead('out'); break;
         case 'ArrowLeft':
           e.preventDefault();
           if (state.path) e.shiftKey ? seek(currentTime() - 1) : frameStep(-1);
@@ -862,8 +919,8 @@
       if (f) handleFile(f);
     });
 
-    $('markInBtn').addEventListener('click', () => setIn(currentTime()));
-    $('markOutBtn').addEventListener('click', () => setOut(currentTime()));
+    $('markInBtn').addEventListener('click', () => markFromPlayhead('in'));
+    $('markOutBtn').addEventListener('click', () => markFromPlayhead('out'));
     $('inTime').addEventListener('change', (e) => setIn(Number(e.target.value)));
     $('outTime').addEventListener('change', (e) => setOut(Number(e.target.value)));
 
@@ -888,6 +945,8 @@
     $('previewCmdBtn').addEventListener('click', previewCommand);
     $('runBtn').addEventListener('click', executeTask);
     $('refreshTasksBtn').addEventListener('click', refreshTasks);
+    $('cleanupBtn').addEventListener('click', cleanupOld);
+    $('loadPlayerBtn').addEventListener('click', togglePlayer);
 
     bindTimeline();
     bindHotkeys();
@@ -895,6 +954,7 @@
 
   async function init() {
     bindUI();
+    showPlayerPlaceholder(); // 初始仅元数据模式，并缓存占位节点供卸载时复用
     try {
       const h = await api('/api/health');
       $('healthInfo').textContent = h.version || 'ffmpeg 已就绪';

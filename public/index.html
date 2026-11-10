@@ -25,7 +25,17 @@
 
   <main>
     <section class="panel player-panel">
-      <div id="artplayer" class="player-box"></div>
+      <div class="player-bar">
+        <button class="btn small" id="loadPlayerBtn">加载播放器</button>
+        <span class="meta" id="playerModeHint">仅用 ffmpeg 读取元数据，未加载播放器（可正常剪辑）</span>
+      </div>
+      <div id="artplayer" class="player-box">
+        <div class="player-placeholder" id="playerPlaceholder">
+          <strong>未加载播放器</strong>
+          <span>已用 ffmpeg 读取元数据，可直接设置入/出点并剪辑。</span>
+          <span>如需预览播放，点击上方「加载播放器」。</span>
+        </div>
+      </div>
     </section>
 
     <section class="panel timeline-panel">
