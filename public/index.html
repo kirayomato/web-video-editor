@@ -171,6 +171,11 @@
 
     <section class="panel tasks-panel">
       <h2>任务列表 <button class="btn small" id="refreshTasksBtn">刷新</button></h2>
+      <div class="cleanup-bar">
+        <label>清理 <input type="number" id="cleanupDays" value="7" min="1" max="365"> 天前的产物</label>
+        <button class="btn small" id="cleanupBtn">清理旧产物</button>
+        <span class="meta" id="cleanupInfo"></span>
+      </div>
       <div id="taskList"><p class="hint">暂无任务</p></div>
     </section>
   </main>

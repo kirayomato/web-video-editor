@@ -10,6 +10,7 @@ import os
 import re
 import sys
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
@@ -328,6 +329,49 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(200, {"path": str(dest), "name": dest.name})
             except Exception as e:
                 return self._error(500, str(e))
+
+        if p == "/api/cleanup" and method == "POST":
+            try:
+                raw = self._read_body()
+                payload = json.loads(raw.decode("utf-8") or "{}")
+                days = payload.get("days")
+                days = float(7 if days is None else days)
+                if days < 1 or days > 365:
+                    return self._error(400, "days 需为 1~365 之间的整数（0 表示不清理）")
+                cutoff = time.time() - days * 86400
+                deleted = 0
+                freed = 0
+                files = []
+                try:
+                    names = os.listdir(OUT_DIR)
+                except OSError:
+                    names = []
+                for name in names:
+                    fp = os.path.join(OUT_DIR, name)
+                    if not os.path.isfile(fp):
+                        continue
+                    try:
+                        st = os.stat(fp)
+                    except OSError:
+                        continue
+                    if st.st_mtime < cutoff:
+                        try:
+                            freed += st.st_size
+                            os.remove(fp)
+                            deleted += 1
+                            files.append(name)
+                        except OSError:
+                            pass
+                return self._json(200, {
+                    "ok": True,
+                    "dir": str(OUT_DIR),
+                    "days": days,
+                    "deleted": deleted,
+                    "bytes": freed,
+                    "files": files,
+                })
+            except Exception as e:
+                return self._error(400, str(e))
 
         if p.startswith("/api/cache/") and method in ("GET", "HEAD"):
             name = os.path.basename(p[len("/api/cache/"):])

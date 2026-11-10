@@ -629,6 +629,35 @@
     }
   }
 
+  function dayLabel(d) { return `${d} 天前`; }
+
+  async function cleanupOld() {
+    const days = Number($('cleanupDays').value);
+    if (!Number.isFinite(days) || days < 1) {
+      err('请输入大于 0 的天数（1~365，0 表示不清理）');
+      return;
+    }
+    const info = $('cleanupInfo');
+    info.textContent = '清理中…';
+    try {
+      const res = await api('/api/cleanup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ days }),
+      });
+      if (res.deleted > 0) {
+        info.textContent = `已清理 ${res.deleted} 个文件，释放 ${fmtBytes(res.bytes)}`;
+        status(`已清理 ${res.deleted} 个${dayLabel(days)}产物，释放 ${fmtBytes(res.bytes)}`, 'ok');
+      } else {
+        info.textContent = `${dayLabel(days)}的产物无需清理`;
+        status(`${dayLabel(days)}的产物无需清理`);
+      }
+    } catch (e) {
+      info.textContent = '';
+      err('清理失败：' + e.message);
+    }
+  }
+
   // ---------------- 上传 ----------------
   function uploadFile(file) {
     return new Promise((resolve, reject) => {
