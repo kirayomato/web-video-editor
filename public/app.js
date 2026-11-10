@@ -104,27 +104,42 @@
   // ---------------- 加载文件 ----------------
   async function loadFromPath(path, name) {
     path = cleanPath(path);
+    if (!path) { err('请提供视频文件路径'); return; }
+    // 关键：先记下路径——即使 ffprobe / 浏览器播放失败，也要保证后续 ffmpeg 剪辑可用
+    state.path = path;
+    state.name = name || path.split(/[\\/]/).pop() || 'video';
+    state.inPoint = 0;
+    state.outPoint = 0;
+    state.viewStart = 0;
+    state.viewEnd = 0;
+    $('pathInput').value = path;
+    $('downloadSourceBtn').disabled = false;
+
     status('探测媒体信息…');
     try {
       const info = await api('/api/probe?path=' + encodeURIComponent(path));
-      state.path = info.path;
-      state.name = name || info.name;
       state.duration = info.duration || 0;
       state.fps = (info.video && info.video.fps) || 30;
-      state.inPoint = 0;
       state.outPoint = state.duration;
-      state.viewStart = 0;
       state.viewEnd = state.duration;
-      $('pathInput').value = info.path;
+      state.name = name || info.name;
       renderMediaInfo(info);
-      initPlayer(info.path);
-      syncSelectionUI();
-      $('downloadSourceBtn').disabled = false;
       status(`已载入：${info.name}（${fmtTime(info.duration)}）`, 'ok');
-      loadTimelineAssets(info.path, info.duration);
     } catch (e) {
-      err('载入失败：' + e.message);
+      // 读取/探测失败：不阻塞剪辑。ffmpeg 通常比浏览器/ffprobe 更宽容，仍可直接处理
+      state.duration = 0;
+      state.fps = 30;
+      state.outPoint = 0;
+      state.viewEnd = 0;
+      renderMediaInfo({ name: state.name, path, duration: 0 });
+      status(`⚠ 无法读取媒体信息（${e.message}），但仍可用 ffmpeg 剪辑；请在右侧手动填写入/出点区间。`, 'warn');
     }
+
+    // 始终尝试初始化播放器：能播则播，不能播会在播放器内报错，但不影响剪辑
+    initPlayer(path);
+    syncSelectionUI();
+    // 仅在有有效时长时生成时间线波形（读取失败时跳过，避免覆盖上面的警告）
+    if (state.duration > 0) loadTimelineAssets(path, state.duration);
   }
 
   function renderMediaInfo(info) {
@@ -315,9 +330,13 @@
     $('inTime').value = state.inPoint.toFixed(2);
     $('outTime').value = state.outPoint.toFixed(2);
     const len = Math.max(0, state.outPoint - state.inPoint);
-    $('rangeInfo').textContent = state.duration
-      ? `区间 ${fmtTime(state.inPoint)} ~ ${fmtTime(state.outPoint)}（时长 ${fmtTime(len)}）`
-      : '未选择区间';
+    if (state.duration) {
+      $('rangeInfo').textContent = `区间 ${fmtTime(state.inPoint)} ~ ${fmtTime(state.outPoint)}（时长 ${fmtTime(len)}）`;
+    } else if (state.outPoint > state.inPoint) {
+      $('rangeInfo').textContent = `区间 ${fmtTime(state.inPoint)} ~ ${fmtTime(state.outPoint)}（时长未知，已手动填写）`;
+    } else {
+      $('rangeInfo').textContent = '时长未知：请在右侧入/出点输入框手动填写区间';
+    }
     updateTimeUI();
   }
 
@@ -328,15 +347,24 @@
     $('frameTime').textContent = fmtTime(t);
   }
 
+  // 时长未知（读取失败）时返回 Infinity，入/出点不再被 0 时长夹死，仍可手动填写区间
+  function _maxTime() { return state.duration > 0 ? state.duration : Infinity; }
+
   function setIn(t) {
-    state.inPoint = Math.max(0, Math.min(t, state.outPoint - 0.05));
-    if (state.outPoint <= state.inPoint) state.outPoint = Math.min(state.duration, state.inPoint + 0.05);
+    t = Number(t) || 0;
+    const hi = _maxTime();
+    state.inPoint = Math.max(0, Math.min(t, hi));
+    // 入点顶到出点时，自动把出点外推（受已知时长上限约束；时长未知时为无穷大）
+    if (state.outPoint <= state.inPoint) {
+      state.outPoint = Math.min(hi, state.inPoint + 0.05);
+    }
     syncSelectionUI();
     updateKeyframeHint();
   }
 
   function setOut(t) {
-    state.outPoint = Math.min(state.duration, Math.max(t, state.inPoint + 0.05));
+    t = Number(t) || 0;
+    state.outPoint = Math.min(_maxTime(), Math.max(t, state.inPoint + 0.05));
     syncSelectionUI();
     updateKeyframeHint();
   }
@@ -552,6 +580,7 @@
             </div>
           </div>
           ${t.error ? `<p class="task-error">${t.error}</p>` : ''}
+          ${t.note ? `<p class="hint">ⓘ ${t.note}</p>` : ''}
           <details class="task-cmd"><summary>ffmpeg 命令</summary><code>${t.command || ''}</code></details>
         </div>`;
     }).join('');

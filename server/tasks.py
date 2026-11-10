@@ -27,6 +27,7 @@ class TaskStore:
         self._validate(task)
 
         duration = None
+        note = None
         if task["type"] != "concat":
             try:
                 info = probe(task["path"])
@@ -36,10 +37,14 @@ class TaskStore:
                 if task["type"] == "audio" and task.get("action") == "extract" and info.get("audio"):
                     task["_audio_codec"] = info["audio"].get("codec_name")
             except Exception as e:
-                raise RuntimeError(f"ffprobe 失败: {e}") from e
+                # ffprobe 读取失败不阻塞：ffmpeg 通常更宽容，仍可直接处理（读取失败也能剪辑）
+                note = f"ffprobe 读取失败：{e}；已跳过预检，交由 ffmpeg 直接处理"
         elif task["type"] == "cut-middle" and not task.get("duration"):
-            info = probe(task["path"])
-            task["duration"] = info.get("duration")
+            try:
+                info = probe(task["path"])
+                task["duration"] = info.get("duration")
+            except Exception as e:
+                note = f"ffprobe 读取失败：{e}；删除中间段将不自动保留出点之后内容"
 
         built = build_command(task)
         out_path = built["outPath"]
@@ -49,6 +54,7 @@ class TaskStore:
                 "command": built["command"],
                 "outPath": out_path,
                 "outName": os.path.basename(out_path),
+                "note": note,
             }
 
         tid = "t_" + uuid.uuid4().hex[:12]
@@ -63,6 +69,7 @@ class TaskStore:
             "outPath": out_path,
             "outName": os.path.basename(out_path),
             "error": None,
+            "note": note,
             "createdAt": time.time(),
             "duration": duration,
             "_built": built,
@@ -131,6 +138,7 @@ class TaskStore:
             "outPath": t["outPath"] if t["status"] == "done" else None,
             "outName": t["outName"],
             "error": t["error"],
+            "note": t.get("note"),
             "createdAt": t["createdAt"],
             "duration": t["duration"],
         }

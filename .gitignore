@@ -4,3 +4,4 @@ output/
 .cache/
 *.log
 .workbuddy/
+*.pyc

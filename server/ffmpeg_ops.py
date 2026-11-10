@@ -267,11 +267,13 @@ def build_command(task: dict) -> dict:
     elif t == "cut-middle":
         in_p = float(task.get("in") or 0)
         out_p = float(task.get("out") or 0)
-        duration = float(task.get("duration") or 0)
+        raw_dur = task.get("duration")
+        # 时长未知（读取失败）时用极大值占位：尾部保留到 EOF，ffmpeg 读到文件末尾
+        duration = float(raw_dur) if raw_dur else 1e9
         segs = []
         if in_p > 0.05:
             segs.append((0.0, in_p))
-        if duration > 0 and out_p < duration - 0.05:
+        if out_p < duration - 0.05:
             segs.append((out_p, duration))
         if not segs:
             raise ValueError("删除区间覆盖了整个视频")
