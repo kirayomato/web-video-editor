@@ -49,6 +49,42 @@
 
   function err(msg) { status(msg, 'error'); }
 
+  // 把 HTMLMediaElement.error（MediaError）翻译成可读中文
+  function describeMediaError(me) {
+    if (!me) return '';
+    const codeMap = {
+      1: 'MEDIA_ERR_ABORTED：播放被中止（可能被脚本或用户中断）',
+      2: 'MEDIA_ERR_NETWORK：网络/请求中断（Range 请求或服务端异常，导致数据不完整）',
+      3: 'MEDIA_ERR_DECODE：媒体数据解码失败（文件损坏，或浏览器不支持该编码/容器）',
+      4: 'MEDIA_ERR_SRC_NOT_SUPPORTED：源不支持 / 文件找不到 / MIME 不正确 / 服务器拒绝',
+    };
+    const base = codeMap[me.code] || `MEDIA_ERR(未知 code=${me.code})`;
+    return me.message ? `${base} — ${me.message}` : base;
+  }
+
+  // 统一上报播放错误：从 <video> 取真正的 MediaError，并带上正在播放的 URL
+  function reportPlaybackError(art, playedUrl, retry) {
+    const v = art && art.video;
+    let detail;
+    const me = v && v.error; // 真正的错误藏在 video 元素上，事件对象本身没有 message
+    if (me) {
+      detail = describeMediaError(me);
+    } else if (typeof playedUrl === 'string' && playedUrl.includes('/api/media')) {
+      detail = '媒体加载失败（事件未携带 MediaError，可能是连接被拒或响应非媒体）';
+    } else {
+      detail = '未知播放错误';
+    }
+    const url = (v && (v.currentSrc || v.src)) || playedUrl || '';
+    const retryInfo = (typeof retry === 'number' && retry > 0) ? `（已自动重连 ${retry} 次仍失败）` : '';
+    err(`播放出错${retryInfo}：${detail}｜URL: ${url}`);
+    // 额外探测：直接 HEAD 请求媒体地址，暴露 404/403/500 等 HTTP 错误（路径问题最常见）
+    if (url) {
+      fetch(url, { method: 'HEAD' }).then((r) => {
+        if (!r.ok) err(`媒体地址返回 HTTP ${r.status} ${r.statusText}｜${url}`);
+      }).catch(() => { /* 网络层错误已通过 MediaError 体现，无需重复 */ });
+    }
+  }
+
   async function api(url, options) {
     const res = await fetch(url, options);
     const data = await res.json().catch(() => ({}));
@@ -163,7 +199,7 @@
       $('frameTime').textContent = fmtTime(t);
     });
     art.on('video:loadedmetadata', () => updateTimeUI());
-    art.on('error', (e) => err('播放出错：' + (e && e.message ? e.message : JSON.stringify(e))));
+    art.on('error', (e, retry) => reportPlaybackError(art, url, retry));
     art.on('ready', () => updateTimeUI());
   }
 
