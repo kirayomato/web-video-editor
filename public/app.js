@@ -430,8 +430,8 @@
     const full = ve - vs >= d - 1e-6;
     const zoom = (d / Math.max(ve - vs, 1e-6));
     el.textContent = full
-      ? '视图 全览'
-      : `视图 ${fmtTime(vs)} ~ ${fmtTime(ve)}（${zoom.toFixed(1)}x）`;
+      ? `视图 全览（${fmtTime(d)}）`
+      : `视图 ${fmtTime(vs)} ~ ${fmtTime(ve)}（窗口 ${fmtTime(ve - vs)}，${zoom.toFixed(1)}x）`;
   }
 
   function setView(vs, ve) {
