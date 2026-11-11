@@ -638,6 +638,7 @@ def _wave_width(duration: float) -> int:
     if not duration or duration <= 0:
         return WAVE_WIDTH_BASE
     return min(
+        WAVE_MAX_WIDTH,
         max(
             WAVE_MIN_WIDTH,
             int(round(duration / WAVE_SECONDS_PER_IMAGE * WAVE_WIDTH_BASE)),
