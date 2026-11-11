@@ -172,7 +172,11 @@
       const assets = await api(`/api/timeline?path=${encodeURIComponent(path)}&duration=${duration || 0}`);
       const wave = $('tlWave');
       wave.style.backgroundImage = assets.wave ? `url("${assets.wave}")` : 'none';
-      if (!assets.wave) status('未生成波形（文件可能无音轨），时间线仍可点击跳转');
+      if (!assets.wave) {
+        if (assets.reason === 'no_audio') status('文件无音轨，未生成波形，时间线仍可点击跳转');
+        else if (assets.reason === 'failed') status('波形生成失败：' + (assets.error || '未知错误') + '，时间线仍可点击跳转', 'error');
+        else status('未生成波形，时间线仍可点击跳转');
+      }
       applyWaveView();
     } catch (e) {
       status('时间线素材生成失败：' + e.message, 'error');

@@ -732,6 +732,8 @@ def build_timeline_assets(file_path: str) -> dict:
     """生成时间线波形素材（时间线只显示音频波形；点击跳转由前端处理）。
 
     幅度自动缩放：先按峰值归一（安静录音自动放大），再按内容裁切填满显示。
+    返回结构带 reason 字段：ok（命中缓存或生成成功）/
+    no_audio（无音轨）/ failed（有音轨但生成失败，附 error 明细）。
     """
     st = os.stat(file_path)
     # wave5：波形按时长等比的动态分辨率 + 自动增益 + 内容裁切，与旧缓存区分
@@ -741,51 +743,57 @@ def build_timeline_assets(file_path: str) -> dict:
     wave_file = CACHE_DIR / f"{key}_wave.png"
     raw_file = CACHE_DIR / f"{key}_wave_raw.png"
 
-    if not wave_file.exists():
-        try:
-            info = probe(file_path)
-            w = _wave_width(info.get("duration") or 0)
-            gain = wave_gain_db(file_path)
-            run_collect(
-                [
-                    FFMPEG,
-                    "-y",
-                    "-hide_banner",
-                    "-nostdin",
-                    "-i",
-                    file_path,
-                    # showwavespic 需整段音频缓冲，先降采样/降位深/转单声道压内存
-                    "-filter_complex",
-                    f"volume={gain:.2f}dB,aresample=16000,aformat=sample_fmts=s16:channel_layouts=mono,showwavespic=s={w}x{WAVE_HEIGHT}:colors=#378ADD",
-                    "-frames:v",
-                    "1",
-                    "-update",
-                    "1",
-                    str(raw_file),
-                ],
-                8 * 1024 * 1024,
-            )
-            y, hh = _wave_band(str(raw_file), w, WAVE_HEIGHT)
-            run_collect(
-                [
-                    FFMPEG,
-                    "-y",
-                    "-hide_banner",
-                    "-nostdin",
-                    "-i",
-                    str(raw_file),
-                    "-vf",
-                    f"crop={w}:{hh}:0:{y}",
-                    str(wave_file),
-                ],
-                8 * 1024 * 1024,
-            )
-            raw_file.unlink(missing_ok=True)
-        except Exception:
-            pass  # 无音轨 → 无波形
+    if wave_file.exists():
+        return {"wave": f"/api/cache/{wave_file.name}", "reason": "ok"}
+
+    info = probe(file_path)
+    if not info.get("audio"):
+        return {"wave": None, "reason": "no_audio"}
+
+    try:
+        w = _wave_width(info.get("duration") or 0)
+        gain = wave_gain_db(file_path)
+        run_collect(
+            [
+                FFMPEG,
+                "-y",
+                "-hide_banner",
+                "-nostdin",
+                "-i",
+                file_path,
+                # showwavespic 需整段音频缓冲，先降采样/降位深/转单声道压内存
+                "-filter_complex",
+                f"volume={gain:.2f}dB,aresample=16000,aformat=sample_fmts=s16:channel_layouts=mono,showwavespic=s={w}x{WAVE_HEIGHT}:colors=#378ADD",
+                "-frames:v",
+                "1",
+                "-update",
+                "1",
+                str(raw_file),
+            ],
+            8 * 1024 * 1024,
+        )
+        y, hh = _wave_band(str(raw_file), w, WAVE_HEIGHT)
+        run_collect(
+            [
+                FFMPEG,
+                "-y",
+                "-hide_banner",
+                "-nostdin",
+                "-i",
+                str(raw_file),
+                "-vf",
+                f"crop={w}:{hh}:0:{y}",
+                str(wave_file),
+            ],
+            8 * 1024 * 1024,
+        )
+        raw_file.unlink(missing_ok=True)
+    except Exception as e:
+        return {"wave": None, "reason": "failed", "error": str(e)}
 
     return {
         "wave": f"/api/cache/{wave_file.name}" if wave_file.exists() else None,
+        "reason": "ok" if wave_file.exists() else "failed",
     }
 
 
