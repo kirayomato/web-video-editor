@@ -626,10 +626,10 @@ class StepRunner:
 # 时间线波形分辨率：宽度按时长等比例放大（每半小时 4000px），深度缩放浏览时
 # 横向清晰度恒定（列宽只取决于可见窗口，不再随整段时长被摊薄）；高度固定，
 # 供 CSS 纵向拉伸填满。
-WAVE_HEIGHT = 400
+WAVE_HEIGHT = 600
 WAVE_SECONDS_PER_IMAGE = 30 * 60  # 一幅图的基准时长（半小时）
 WAVE_WIDTH_BASE = 4000  # 该时长对应的横向像素
-WAVE_MIN_WIDTH = 1000  # 短视频保底宽度
+WAVE_MIN_WIDTH = 2000  # 短视频保底宽度
 WAVE_MAX_WIDTH = 20000  # 最大宽度
 
 
