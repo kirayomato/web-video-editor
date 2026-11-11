@@ -16,6 +16,7 @@
     activeOp: 'trim',
     pendingFile: null,
     tasks: {},
+    cursor: 0, // 播放头位置：未加载播放器时由时间线点击/方向键驱动
     playerEnabled: false, // 是否加载浏览器播放器；默认 false = 仅用 ffmpeg 读元数据
   };
 
@@ -113,6 +114,7 @@
     state.outPoint = 0;
     state.viewStart = 0;
     state.viewEnd = 0;
+    state.cursor = 0;
     $('pathInput').value = path;
     $('downloadSourceBtn').disabled = false;
 
@@ -259,6 +261,7 @@
     state.art = art;
 
     art.on('video:timeupdate', () => {
+      state.cursor = art.currentTime || 0; // 同步光标，切回仅元数据模式时保留位置
       updateTimeUI();
       ensurePlayheadVisible(); // 缩放后播放头离开可见窗口时把窗口拉回
       const t = art.currentTime || 0;
@@ -270,14 +273,15 @@
   }
 
   function currentTime() {
-    return (state.art && Number.isFinite(state.art.currentTime)) ? state.art.currentTime : 0;
+    // 加载了播放器时随真实播放位置；否则用独立光标（时间线点击/方向键驱动）
+    return (state.art && Number.isFinite(state.art.currentTime)) ? state.art.currentTime : state.cursor;
   }
 
   function seek(t) {
-    if (!state.art) return;
     const v = Math.max(0, Math.min(state.duration || t, t));
+    state.cursor = v; // 播放头位置：无论有无播放器都更新
     // ArtPlayer 5.x：seek 是 setter 属性（art.seek = 秒数），不是方法，调用形式会抛 TypeError
-    state.art.seek = v;
+    if (state.art) state.art.seek = v;
     updateTimeUI();
     ensurePlayheadVisible();
   }
@@ -420,12 +424,9 @@
     updateKeyframeHint();
   }
 
-  // 用播放头标记入/出点：仅在加载了播放器时有意义
+  // 用播放头/光标标记入/出点：加载了播放器时取真实位置，否则取独立光标定位
   function markFromPlayhead(which) {
     if (!state.path) return err('请先载入视频文件');
-    if (!state.playerEnabled) {
-      return err('播放器未加载：请在右侧入/出点输入框手动填写秒数');
-    }
     if (which === 'in') setIn(currentTime());
     else setOut(currentTime());
   }
