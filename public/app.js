@@ -780,6 +780,16 @@
 
   // ---------------- 本地文件浏览器 ----------------
   const FS_LAST_DIR_KEY = 'wve.fsLastDir';
+  const FS_SORT_KEY = 'wve.fsSort';
+  const FS_SORT_KEYS = ['name', 'size', 'mtime'];
+  const fsSort = (() => {
+    try {
+      const s = JSON.parse(localStorage.getItem(FS_SORT_KEY));
+      if (s && FS_SORT_KEYS.includes(s.key) && (s.dir === 'asc' || s.dir === 'desc')) return s;
+    } catch (e) {}
+    return { key: 'name', dir: 'asc' };
+  })();
+  let fsLastData = null;
 
   function fsInitialDir() {
     const saved = localStorage.getItem(FS_LAST_DIR_KEY);
@@ -788,7 +798,7 @@
       const i = Math.max(state.path.lastIndexOf('\\'), state.path.lastIndexOf('/'));
       if (i > 0) return state.path.slice(0, i);
     }
-    return null; // 由后端 roots 决定
+    return null; // 由后端决定：home 优先，回落磁盘根
   }
 
   function fsParentOf(p) {
@@ -806,8 +816,8 @@
     try {
       if (path == null) {
         const d = await api('/api/fs/roots');
-        path = (d.roots && d.roots[0]) || null;
-        if (!path) { list.innerHTML = '<p class="fs-empty">没有可用的磁盘根</p>'; return; }
+        path = d.home || (d.roots && d.roots[0]) || null;
+        if (!path) { list.innerHTML = '<p class="fs-empty">没有可用的目录</p>'; return; }
       }
       const all = $('fsFilter').value === 'all' ? '&all=1' : '';
       const data = await api(`/api/fs/list?path=${encodeURIComponent(path)}${all}`);
@@ -819,17 +829,37 @@
     }
   }
 
+  function fsCompare(a, b) {
+    if (a.isDir !== b.isDir) return a.isDir ? -1 : 1; // 文件夹恒在前
+    let r = 0;
+    if (fsSort.key === 'size') r = a.size - b.size;
+    else if (fsSort.key === 'mtime') r = a.mtime - b.mtime;
+    else r = a.name.localeCompare(b.name, 'zh', { numeric: true, sensitivity: 'base' });
+    return fsSort.dir === 'asc' ? r : -r;
+  }
+
+  function renderFsSortHead() {
+    $('fsHead').querySelectorAll('[data-sort]').forEach((th) => {
+      const active = th.dataset.sort === fsSort.key;
+      th.classList.toggle('active', active);
+      th.querySelector('.fs-sort-ind').textContent = active ? (fsSort.dir === 'asc' ? '▲' : '▼') : '';
+    });
+  }
+
   function renderFsList(data) {
+    fsLastData = data;
+    renderFsSortHead();
     const list = $('fsList');
     const up = $('fsUpBtn');
     up.disabled = !data.parent;
     up.onclick = () => data.parent && fsNavigate(data.parent);
 
-    if (!data.entries.length) {
+    const entries = data.entries.slice().sort(fsCompare);
+    if (!entries.length) {
       list.innerHTML = '<p class="fs-empty">此目录没有可显示的内容（可在上方切换「全部文件」）</p>';
       return;
     }
-    list.innerHTML = data.entries.map((e) => `
+    list.innerHTML = entries.map((e) => `
       <div class="fs-row" data-path="${encodeURIComponent(e.path)}" data-dir="${e.isDir ? 1 : 0}"
            title="${e.isDir ? '单击进入' : '单击载入播放'}">
         <span class="fs-icon">${e.isDir ? '📁' : (e.media ? '🎬' : '📄')}</span>
@@ -886,6 +916,15 @@
     $('fsFilter').addEventListener('change', () => {
       const cur = cleanPath($('fsPathInput').value);
       if (cur) fsNavigate(cur);
+    });
+    $('fsHead').addEventListener('click', (e) => {
+      const th = e.target.closest('[data-sort]');
+      if (!th) return;
+      const key = th.dataset.sort;
+      if (fsSort.key === key) fsSort.dir = fsSort.dir === 'asc' ? 'desc' : 'asc';
+      else { fsSort.key = key; fsSort.dir = 'asc'; }
+      localStorage.setItem(FS_SORT_KEY, JSON.stringify(fsSort));
+      if (fsLastData) renderFsList(fsLastData);
     });
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape' && !$('fsModal').hidden) closeFsBrowser();

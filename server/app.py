@@ -289,7 +289,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._error(400, str(e))
 
         if p == "/api/fs/roots" and method == "GET":
-            return self._json(200, {"roots": list_roots()})
+            return self._json(200, {"roots": list_roots(), "home": os.path.expanduser("~")})
 
         if p == "/api/fs/list" and method == "GET":
             try:
