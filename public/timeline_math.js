@@ -49,19 +49,6 @@
     return zoomAt(viewStart, viewEnd, duration, anchor, 0.5, 1, span);
   }
 
-  // 波形背景铺放：整幅波形图代表 duration，窗口只显示 [viewStart, viewEnd]
-  // size: 背景放大（%），position: 水平偏移（%，CSS background-position 百分比语义）
-  function waveBackground(viewStart, viewEnd, duration) {
-    var span = viewEnd - viewStart;
-    if (!(duration > 0) || !(span > 0) || span >= duration) {
-      return { size: '100% 100%', position: '0% 0%' };
-    }
-    return {
-      size: (duration / span * 100).toFixed(4) + '% 100%',
-      position: (viewStart / (duration - span) * 100).toFixed(4) + '% 0%',
-    };
-  }
-
   return {
     clamp: clamp,
     timeToPct: timeToPct,
@@ -69,6 +56,5 @@
     zoomAt: zoomAt,
     panView: panView,
     followAnchor: followAnchor,
-    waveBackground: waveBackground,
   };
 });

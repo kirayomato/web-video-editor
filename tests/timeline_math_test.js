@@ -49,29 +49,4 @@ ok('播放头在窗口内：不动', a === 10 && b === 20);
 [a, b] = M.followAnchor(10, 20, 100, 30);
 ok('播放头出界：拉回居中', a === 25 && b === 35, `[${a},${b}]`);
 
-// ---- waveBackground ----
-let bg = M.waveBackground(0, 100, 100);
-ok('全览：背景 100%', bg.size === '100% 100%' && bg.position === '0% 0%');
-bg = M.waveBackground(25, 75, 100);
-ok('窗口 [25,75]：size 200% / pos 50%',
-   Math.abs(parseFloat(bg.size) - 200) < 1e-6 && Math.abs(parseFloat(bg.position) - 50) < 1e-6,
-   `${bg.size} @ ${bg.position}`);
-bg = M.waveBackground(0, 25, 100);
-ok('窗口 [0,25]：size 400% / pos 0%',
-   Math.abs(parseFloat(bg.size) - 400) < 1e-6 && parseFloat(bg.position) === 0,
-   `${bg.size} @ ${bg.position}`);
-// 映射验证：时间 t 在窗口内应落在屏幕比例 (t-vs)/span；背景偏移公式等价
-(function () {
-  const d = 100, vs = 30, ve = 70, span = ve - vs;
-  const t = 55;
-  const screenRatio = (t - vs) / span; // 期望 0.625
-  bg = M.waveBackground(vs, ve, d);
-  const sizePct = parseFloat(bg.size), posPct = parseFloat(bg.position);
-  // CSS 百分比定位下时间 t 的实际屏幕比例
-  const W = 1, Wp = W * sizePct / 100, off = posPct / 100 * (W - Wp);
-  const actual = (off + t / d * Wp) / W;
-  ok('waveBackground 映射与 timeToPct 一致', Math.abs(actual - screenRatio) < 1e-9,
-     `actual=${actual} expect=${screenRatio}`);
-})();
-
 console.log(`\n===== timeline_math: ${n} 项全部通过 =====`);

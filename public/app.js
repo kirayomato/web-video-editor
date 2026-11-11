@@ -172,15 +172,24 @@
   async function loadTimelineAssets(path, duration) {
     try {
       const assets = await api(`/api/timeline?path=${encodeURIComponent(path)}&duration=${duration || 0}`);
-      const wave = $('tlWave');
-      wave.style.backgroundImage = assets.wave ? `url("${assets.wave}")` : 'none';
-      if (!assets.wave) {
-        if (assets.reason === 'no_audio') status('文件无音轨，未生成波形，时间线仍可点击跳转');
-        else if (assets.reason === 'failed') status('波形生成失败：' + (assets.error || '未知错误') + '，时间线仍可点击跳转', 'error');
-        else status('未生成波形，时间线仍可点击跳转');
+      resetWave();
+      if (assets.wave) {
+        try {
+          await loadWaveEnvelope(assets.wave);
+        } catch (e) {
+          status('波形解码失败：' + e.message + '，时间线仍可点击跳转', 'error');
+        }
+      } else if (assets.reason === 'no_audio') {
+        status('文件无音轨，未生成波形，时间线仍可点击跳转');
+      } else if (assets.reason === 'failed') {
+        status('波形生成失败：' + (assets.error || '未知错误') + '，时间线仍可点击跳转', 'error');
+      } else {
+        status('未生成波形，时间线仍可点击跳转');
       }
       applyWaveView();
     } catch (e) {
+      resetWave();
+      applyWaveView();
       status('时间线素材生成失败：' + e.message, 'error');
     }
   }
@@ -308,13 +317,107 @@
     return M.timeToPct(t, vs, ve);
   }
 
-  function applyWaveView() {
-    // 波形图代表整段时长，按可见窗口反向铺放（放大/平移）
+  // 波形包络：PNG 只解码一次，按列记下 alpha 上下沿，绘制时按可见窗口映射成
+  // 硬边竖条。横向像素由服务端按时长给定，前端只做列映射，不缩放位图。
+  const wave = { top: null, bottom: null, cols: 0, rows: 0 };
+
+  function resetWave() {
+    wave.top = null;
+    wave.bottom = null;
+    wave.cols = 0;
+    wave.rows = 0;
+  }
+
+  function loadWaveEnvelope(url) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => {
+        try {
+          extractEnvelope(img);
+          resolve();
+        } catch (e) {
+          reject(e);
+        }
+      };
+      img.onerror = () => reject(new Error('波形图加载失败'));
+      img.src = url;
+    });
+  }
+
+  // 逐列取笔画上下沿；无笔画的静音列落在中线，退化成一条细线
+  function extractEnvelope(img) {
+    const w = img.naturalWidth;
+    const h = img.naturalHeight;
+    const off = document.createElement('canvas');
+    off.width = w;
+    off.height = h;
+    const ctx = off.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(img, 0, 0);
+    const px = ctx.getImageData(0, 0, w, h).data;
+    const top = new Uint16Array(w);
+    const bottom = new Uint16Array(w);
+    const mid = h >> 1;
+    for (let x = 0; x < w; x++) {
+      let t = -1;
+      let b = -1;
+      for (let y = 0; y < h; y++) {
+        if (px[(y * w + x) * 4 + 3] > 24) {
+          if (t < 0) t = y;
+          b = y;
+        }
+      }
+      top[x] = t < 0 ? mid : t;
+      bottom[x] = b < 0 ? mid : b;
+    }
+    wave.top = top;
+    wave.bottom = bottom;
+    wave.cols = w;
+    wave.rows = h;
+  }
+
+  // 一个设备像素一列：缩小时取覆盖范围内的上下最值（不丢峰值），放大时同一列
+  // 重复铺开成竖条（不插值）。横向落在整数设备像素上，避免灰边。
+  function drawWave() {
+    const canvas = $('tlWaveCanvas');
+    if (!canvas) return;
+    const box = canvas.parentElement.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    const pw = Math.max(1, Math.round(box.width * dpr));
+    const ph = Math.max(1, Math.round(box.height * dpr));
+    if (canvas.width !== pw || canvas.height !== ph) {
+      canvas.width = pw;
+      canvas.height = ph;
+    }
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, pw, ph);
+    if (!wave.cols || !(state.duration > 0)) return;
+
     const [vs, ve] = view();
-    const bg = M.waveBackground(vs, ve, state.duration || 0);
-    const wave = $('tlWave');
-    wave.style.backgroundSize = bg.size;
-    wave.style.backgroundPosition = bg.position;
+    const span = ve - vs;
+    if (!(span > 0)) return;
+
+    const colAtLeft = vs / state.duration * wave.cols;
+    const colsPerPx = span / state.duration * wave.cols / pw;
+    ctx.fillStyle = '#378ADD';
+    for (let x = 0; x < pw; x++) {
+      const c0 = Math.floor(colAtLeft + x * colsPerPx);
+      const c1 = Math.max(c0 + 1, Math.floor(colAtLeft + (x + 1) * colsPerPx));
+      let t = wave.rows;
+      let b = -1;
+      for (let c = c0; c < c1; c++) {
+        if (c < 0 || c >= wave.cols) continue;
+        if (wave.top[c] < t) t = wave.top[c];
+        if (wave.bottom[c] > b) b = wave.bottom[c];
+      }
+      if (b < 0) continue;
+      const y = t / wave.rows * ph;
+      const hh = Math.max(1, (b + 1) / wave.rows * ph - y);
+      ctx.fillRect(x, Math.min(y, ph - hh), 1, hh);
+    }
+  }
+
+  function applyWaveView() {
+    drawWave();
     updateViewInfo();
   }
 
@@ -509,6 +612,9 @@
       if (e.target.id === 'handleIn' || e.target.id === 'handleOut') return;
       resetView();
     });
+
+    // 容器尺寸变化后重设画布分辨率并重绘
+    window.addEventListener('resize', () => applyWaveView());
   }
 
   // ---------------- 操作面板 ----------------
