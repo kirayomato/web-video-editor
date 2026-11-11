@@ -1,6 +1,6 @@
 """网页视频剪辑器 — 本地服务（Python 标准库，零第三方依赖）。
 
-启动: python server/app.py   （默认 http://127.0.0.1:8787）
+启动: python server/app.py   （默认 http://127.0.0.1:7788）
 """
 
 from __future__ import annotations
@@ -18,15 +18,24 @@ from urllib.parse import parse_qs, unquote, urlparse
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from ffmpeg_ops import (  # noqa: E402
-    CACHE_DIR, FFMPEG, FFPROBE, OUT_DIR, UPLOAD_DIR,
-    assert_local_dir, assert_local_path, build_timeline_assets, clean_path_str,
-    ffmpeg_version, keyframes_near, probe,
+    CACHE_DIR,
+    FFMPEG,
+    FFPROBE,
+    OUT_DIR,
+    UPLOAD_DIR,
+    assert_local_dir,
+    assert_local_path,
+    build_timeline_assets,
+    clean_path_str,
+    ffmpeg_version,
+    keyframes_near,
+    probe,
 )
 from tasks import store  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 PUBLIC_DIR = ROOT / "public"
-PORT = int(os.environ.get("PORT", "8787"))
+PORT = int(os.environ.get("PORT", "7788"))
 HOST = os.environ.get("HOST", "0.0.0.0")
 
 MIME = {
@@ -61,16 +70,46 @@ def file_stat(p: str):
 
 # 本地文件浏览器：常见视频/音频扩展名（过滤用）
 MEDIA_EXTS = {
-    ".mp4", ".webm", ".mkv", ".mov", ".avi", ".flv", ".m4v", ".ts", ".mts", ".m2ts",
-    ".wmv", ".mpg", ".mpeg", ".mpe", ".3gp", ".ogv", ".rm", ".rmvb", ".vob", ".divx",
-    ".m4a", ".mp3", ".wav", ".aac", ".flac", ".opus", ".ogg", ".wma", ".mka", ".ape", ".aiff",
+    ".mp4",
+    ".webm",
+    ".mkv",
+    ".mov",
+    ".avi",
+    ".flv",
+    ".m4v",
+    ".ts",
+    ".mts",
+    ".m2ts",
+    ".wmv",
+    ".mpg",
+    ".mpeg",
+    ".mpe",
+    ".3gp",
+    ".ogv",
+    ".rm",
+    ".rmvb",
+    ".vob",
+    ".divx",
+    ".m4a",
+    ".mp3",
+    ".wav",
+    ".aac",
+    ".flac",
+    ".opus",
+    ".ogg",
+    ".wma",
+    ".mka",
+    ".ape",
+    ".aiff",
 }
 
 
 def list_roots() -> list:
     """列出可浏览的根（Windows 盘符 / Unix 根）。"""
     if os.name == "nt":
-        roots = [f"{c}:\\" for c in "ABCDEFGHIJKLMNOPQRSTUVWXYZ" if os.path.exists(f"{c}:\\")]
+        roots = [
+            f"{c}:\\" for c in "ABCDEFGHIJKLMNOPQRSTUVWXYZ" if os.path.exists(f"{c}:\\")
+        ]
         return roots or ["C:\\"]
     return ["/"]
 
@@ -93,15 +132,17 @@ def list_dir(path: str, show_all: bool = False) -> dict:
         ext = "" if is_dir else os.path.splitext(name)[1].lower()
         if not is_dir and not show_all and ext not in MEDIA_EXTS:
             continue
-        entries.append({
-            "name": name,
-            "path": full,
-            "isDir": is_dir,
-            "size": 0 if is_dir else st.st_size,
-            "mtime": st.st_mtime,
-            "ext": ext,
-            "media": (not is_dir) and ext in MEDIA_EXTS,
-        })
+        entries.append(
+            {
+                "name": name,
+                "path": full,
+                "isDir": is_dir,
+                "size": 0 if is_dir else st.st_size,
+                "mtime": st.st_mtime,
+                "ext": ext,
+                "media": (not is_dir) and ext in MEDIA_EXTS,
+            }
+        )
     entries.sort(key=lambda e: (not e["isDir"], e["name"].lower()))
     norm = os.path.normpath(p)
     parent = os.path.dirname(norm)
@@ -155,7 +196,10 @@ class Handler(BaseHTTPRequestHandler):
         if download:
             name = filename or os.path.basename(file_path)
             from urllib.parse import quote
-            headers["Content-Disposition"] = f"attachment; filename*=UTF-8''{quote(name)}"
+
+            headers["Content-Disposition"] = (
+                f"attachment; filename*=UTF-8''{quote(name)}"
+            )
 
         range_header = self.headers.get("Range")
         start = end = None
@@ -259,12 +303,15 @@ class Handler(BaseHTTPRequestHandler):
         method = "POST" if body else "GET"
 
         if p == "/api/health" and method == "GET":
-            return self._json(200, {
-                "ok": True,
-                "ffmpeg": FFMPEG,
-                "ffprobe": FFPROBE,
-                "version": ffmpeg_version(),
-            })
+            return self._json(
+                200,
+                {
+                    "ok": True,
+                    "ffmpeg": FFMPEG,
+                    "ffprobe": FFPROBE,
+                    "version": ffmpeg_version(),
+                },
+            )
 
         if p == "/api/probe" and method == "GET":
             try:
@@ -289,7 +336,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._error(400, str(e))
 
         if p == "/api/fs/roots" and method == "GET":
-            return self._json(200, {"roots": list_roots(), "home": os.path.expanduser("~")})
+            return self._json(
+                200, {"roots": list_roots(), "home": os.path.expanduser("~")}
+            )
 
         if p == "/api/fs/list" and method == "GET":
             try:
@@ -315,7 +364,10 @@ class Handler(BaseHTTPRequestHandler):
         if p == "/api/upload" and method == "POST":
             try:
                 raw_name = q.get("name") or "upload.mp4"
-                name = re.sub(r"[^\w.\u4e00-\u9fa5-]+", "_", os.path.basename(raw_name)) or "upload.mp4"
+                name = (
+                    re.sub(r"[^\w.\u4e00-\u9fa5-]+", "_", os.path.basename(raw_name))
+                    or "upload.mp4"
+                )
                 dest = UPLOAD_DIR / f"{int(__import__('time').time() * 1000)}_{name}"
                 length = int(self.headers.get("Content-Length") or 0)
                 with open(dest, "wb") as f:
@@ -337,7 +389,9 @@ class Handler(BaseHTTPRequestHandler):
                 days = payload.get("days")
                 days = float(7 if days is None else days)
                 if days < 1 or days > 365:
-                    return self._error(400, "days 需为 1~365 之间的整数（0 表示不清理）")
+                    return self._error(
+                        400, "days 需为 1~365 之间的整数（0 表示不清理）"
+                    )
                 cutoff = time.time() - days * 86400
                 deleted = 0
                 freed = 0
@@ -362,19 +416,22 @@ class Handler(BaseHTTPRequestHandler):
                             files.append(name)
                         except OSError:
                             pass
-                return self._json(200, {
-                    "ok": True,
-                    "dir": str(OUT_DIR),
-                    "days": days,
-                    "deleted": deleted,
-                    "bytes": freed,
-                    "files": files,
-                })
+                return self._json(
+                    200,
+                    {
+                        "ok": True,
+                        "dir": str(OUT_DIR),
+                        "days": days,
+                        "deleted": deleted,
+                        "bytes": freed,
+                        "files": files,
+                    },
+                )
             except Exception as e:
                 return self._error(400, str(e))
 
         if p.startswith("/api/cache/") and method in ("GET", "HEAD"):
-            name = os.path.basename(p[len("/api/cache/"):])
+            name = os.path.basename(p[len("/api/cache/") :])
             file_path = os.path.abspath(os.path.join(CACHE_DIR, name))
             if not file_path.startswith(str(CACHE_DIR)):
                 return self._error(403, "禁止访问")
@@ -404,7 +461,9 @@ class Handler(BaseHTTPRequestHandler):
 
         if m and method == "POST" and m.group(2) == "/cancel":
             ok = store.cancel(m.group(1))
-            return self._json(200 if ok else 400, {"ok": True} if ok else {"error": "无法取消"})
+            return self._json(
+                200 if ok else 400, {"ok": True} if ok else {"error": "无法取消"}
+            )
 
         return self._error(404, "未知接口")
 
@@ -428,7 +487,10 @@ class Handler(BaseHTTPRequestHandler):
 
         def on_event(event: dict):
             send(event)
-            if event.get("type") == "status" and event.get("status") in ("done", "error"):
+            if event.get("type") == "status" and event.get("status") in (
+                "done",
+                "error",
+            ):
                 done.set()
 
         unsubscribe = store.subscribe(tid, on_event)

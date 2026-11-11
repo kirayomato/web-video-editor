@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """端到端冒烟测试：覆盖 probe/keyframes/timeline/dryRun/各类任务/下载/Range。"""
+
 import json
 import os
 import shutil
@@ -11,7 +12,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-BASE = "http://127.0.0.1:8787"
+BASE = "http://127.0.0.1:7788"
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SAMPLE = os.path.join(ROOT, "tmp", "sample.mp4")
 
@@ -59,9 +60,20 @@ def wait_task(tid, timeout=120):
 def first_packet_pts(file, stream="a:0"):
     """音频首包时间戳（回归：输入侧 -ss + copy 会带负时间戳前摇）。"""
     out = subprocess.run(
-        ["ffprobe", "-v", "error", "-select_streams", stream,
-         "-show_entries", "packet=pts_time", "-of", "csv=p=0", file],
-        capture_output=True, text=True,
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            stream,
+            "-show_entries",
+            "packet=pts_time",
+            "-of",
+            "csv=p=0",
+            file,
+        ],
+        capture_output=True,
+        text=True,
     ).stdout.split()
     return float(out[0]) if out else None
 
@@ -85,16 +97,43 @@ def main():
         check("wave 可访问", len(wave) > 500, f"{len(wave)} bytes")
 
     # 3. dryRun 命令
-    d = post("/api/tasks", {"type": "trim", "path": SAMPLE, "start": 1, "end": 4, "mode": "lossless", "dryRun": True})
+    d = post(
+        "/api/tasks",
+        {
+            "type": "trim",
+            "path": SAMPLE,
+            "start": 1,
+            "end": 4,
+            "mode": "lossless",
+            "dryRun": True,
+        },
+    )
     check("trim 无损 dryRun", "-c copy" in d["command"] and "-ss" in d["command"])
     print("       CMD:", d["command"][:120])
-    d2 = post("/api/tasks", {"type": "trim", "path": SAMPLE, "start": 1, "end": 4, "mode": "precise", "dryRun": True})
+    d2 = post(
+        "/api/tasks",
+        {
+            "type": "trim",
+            "path": SAMPLE,
+            "start": 1,
+            "end": 4,
+            "mode": "precise",
+            "dryRun": True,
+        },
+    )
     check("trim 精确 dryRun", "libx264" in d2["command"])
 
     # 4. trim 无损（真实执行）
-    t = post("/api/tasks", {"type": "trim", "path": SAMPLE, "start": 1, "end": 4, "mode": "lossless"})
+    t = post(
+        "/api/tasks",
+        {"type": "trim", "path": SAMPLE, "start": 1, "end": 4, "mode": "lossless"},
+    )
     r = wait_task(t["id"])
-    check("trim 无损任务", r["status"] == "done", f"status={r['status']} err={r.get('error')}")
+    check(
+        "trim 无损任务",
+        r["status"] == "done",
+        f"status={r['status']} err={r.get('error')}",
+    )
     if r["status"] == "done":
         out = r["outPath"]
         check("trim 输出存在", os.path.isfile(out), out)
@@ -104,7 +143,17 @@ def main():
         check("trim 无损时长 = 出点-对齐入点", 3.9 <= dur <= 4.3, f"{dur:.2f}s")
 
     # 5. trim 精确
-    t = post("/api/tasks", {"type": "trim", "path": SAMPLE, "start": 2, "end": 5, "mode": "precise", "crf": 20})
+    t = post(
+        "/api/tasks",
+        {
+            "type": "trim",
+            "path": SAMPLE,
+            "start": 2,
+            "end": 5,
+            "mode": "precise",
+            "crf": 20,
+        },
+    )
     r = wait_task(t["id"])
     check("trim 精确任务", r["status"] == "done", f"err={r.get('error')}")
     if r["status"] == "done":
@@ -112,10 +161,24 @@ def main():
         dur = info.get("duration") or 0
         check("精确输出时长≈3s", 2.7 <= dur <= 3.3, f"{dur:.2f}s")
         pts = first_packet_pts(r["outPath"])
-        check("精确截取音频无负时间戳前摇", pts is not None and pts >= -0.05, f"first_pts={pts}")
+        check(
+            "精确截取音频无负时间戳前摇",
+            pts is not None and pts >= -0.05,
+            f"first_pts={pts}",
+        )
 
     # 6. cut-middle
-    t = post("/api/tasks", {"type": "cut-middle", "path": SAMPLE, "in": 3, "out": 5, "duration": 10, "mode": "precise"})
+    t = post(
+        "/api/tasks",
+        {
+            "type": "cut-middle",
+            "path": SAMPLE,
+            "in": 3,
+            "out": 5,
+            "duration": 10,
+            "mode": "precise",
+        },
+    )
     r = wait_task(t["id"])
     check("cut-middle 任务", r["status"] == "done", f"err={r.get('error')}")
     if r["status"] == "done":
@@ -139,12 +202,28 @@ def main():
         check("去音轨后无音轨", info.get("audio") is None)
 
     # 8. frame
-    t = post("/api/tasks", {"type": "frame", "path": SAMPLE, "time": 3.3, "format": "jpg"})
+    t = post(
+        "/api/tasks", {"type": "frame", "path": SAMPLE, "time": 3.3, "format": "jpg"}
+    )
     r = wait_task(t["id"])
-    check("截帧 jpg", r["status"] == "done" and os.path.isfile(r.get("outPath") or ""), f"err={r.get('error')}")
+    check(
+        "截帧 jpg",
+        r["status"] == "done" and os.path.isfile(r.get("outPath") or ""),
+        f"err={r.get('error')}",
+    )
 
     # 9. transcode
-    t = post("/api/tasks", {"type": "transcode", "path": SAMPLE, "format": "mp4", "crf": 28, "preset": "ultrafast", "scale": 240})
+    t = post(
+        "/api/tasks",
+        {
+            "type": "transcode",
+            "path": SAMPLE,
+            "format": "mp4",
+            "crf": 28,
+            "preset": "ultrafast",
+            "scale": 240,
+        },
+    )
     r = wait_task(t["id"])
     check("转码任务", r["status"] == "done", f"err={r.get('error')}")
     if r["status"] == "done":
@@ -154,8 +233,18 @@ def main():
 
     # 10. concat（两段 trim 结果）
     outs = []
-    for (s, e) in [(0, 2), (5, 7)]:
-        t = post("/api/tasks", {"type": "trim", "path": SAMPLE, "start": s, "end": e, "mode": "precise", "crf": 20})
+    for s, e in [(0, 2), (5, 7)]:
+        t = post(
+            "/api/tasks",
+            {
+                "type": "trim",
+                "path": SAMPLE,
+                "start": s,
+                "end": e,
+                "mode": "precise",
+                "crf": 20,
+            },
+        )
         r = wait_task(t["id"])
         if r["status"] == "done":
             outs.append(r["outPath"])
@@ -171,10 +260,16 @@ def main():
             check("拼接时长≈4s", 3.6 <= dur <= 4.5, f"{dur:.2f}s")
 
     # 11. Range 播放
-    req = urllib.request.Request(BASE + f"/api/media?path={enc}", headers={"Range": "bytes=0-1023"})
+    req = urllib.request.Request(
+        BASE + f"/api/media?path={enc}", headers={"Range": "bytes=0-1023"}
+    )
     with urllib.request.urlopen(req, timeout=30) as resp:
         body = resp.read()
-        check("media Range 206", resp.status == 206 and len(body) == 1024, f"status={resp.status} len={len(body)}")
+        check(
+            "media Range 206",
+            resp.status == 206 and len(body) == 1024,
+            f"status={resp.status} len={len(body)}",
+        )
 
     # 12. 下载（Content-Disposition）
     req = urllib.request.Request(BASE + f"/api/download?path={enc}&name=test.mp4")
@@ -193,13 +288,24 @@ def main():
     # ArtPlayer 5.x：seek/forward/backward 是 setter 属性（Object.defineProperty 只有 set），
     # 当方法调用会抛 TypeError（曾导致时间线点击跳转失效）——锁死赋值形态。
     src = appjs.decode("utf-8", "replace")
-    check("seek 以属性赋值调用（art.seek = t）", "art.seek =" in src, "缺少 art.seek = 赋值")
+    check(
+        "seek 以属性赋值调用（art.seek = t）",
+        "art.seek =" in src,
+        "缺少 art.seek = 赋值",
+    )
     check("seek 未被当方法调用", ".seek(" not in src, "发现 .seek() 方法调用形态")
     # 时间线滚轮缩放（视图窗口）：核心模块与交互绑定
     mathjs = get("/timeline_math.js", raw=True)
-    check("timeline_math 可访问", b"zoomAt" in mathjs and b"waveBackground" in mathjs, f"{len(mathjs)} bytes")
+    check(
+        "timeline_math 可访问",
+        b"zoomAt" in mathjs and b"waveBackground" in mathjs,
+        f"{len(mathjs)} bytes",
+    )
     check("页面引入 timeline_math", "timeline_math.js" in page)
-    check("时间线绑定 wheel 缩放", "addEventListener('wheel'" in src and "zoomTimeline" in src)
+    check(
+        "时间线绑定 wheel 缩放",
+        "addEventListener('wheel'" in src and "zoomTimeline" in src,
+    )
 
     # 14. 路径清洗（Windows「复制为路径」带引号；中文+空格文件名）
     sp = os.path.join(ROOT, "tmp", "测试 video.mp4")
@@ -216,19 +322,47 @@ def main():
     except urllib.error.HTTPError as e:
         err = json.loads(e.read().decode("utf-8") or "{}").get("error", "")
     check("不存在文件报「文件不存在」", "不存在" in err, err[:80])
-    t = post("/api/tasks", {"type": "trim", "path": '"' + SAMPLE + '"', "start": 1, "end": 2, "mode": "lossless", "dryRun": True})
-    check("任务提交同样清洗路径", "-c copy" in (t.get("command") or ""), (t.get("command") or "")[:60])
+    t = post(
+        "/api/tasks",
+        {
+            "type": "trim",
+            "path": '"' + SAMPLE + '"',
+            "start": 1,
+            "end": 2,
+            "mode": "lossless",
+            "dryRun": True,
+        },
+    )
+    check(
+        "任务提交同样清洗路径",
+        "-c copy" in (t.get("command") or ""),
+        (t.get("command") or "")[:60],
+    )
 
     # 15. 波形自动缩放（峰值归一 + 内容裁切填满）
     sys.path.insert(0, os.path.join(ROOT, "server"))
     from ffmpeg_ops import wave_gain_db
+
     quiet = os.path.join(ROOT, "tmp", "quiet_sample.m4a")
     if not os.path.isfile(quiet):
         subprocess.run(
-            ["ffmpeg", "-y", "-v", "error", "-f", "lavfi",
-             "-i", "sine=frequency=440:duration=6:sample_rate=44100",
-             "-af", "volume=0.05", "-c:a", "aac", quiet],
-            check=True)
+            [
+                "ffmpeg",
+                "-y",
+                "-v",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=440:duration=6:sample_rate=44100",
+                "-af",
+                "volume=0.05",
+                "-c:a",
+                "aac",
+                quiet,
+            ],
+            check=True,
+        )
     g = wave_gain_db(quiet)
     check("安静音频自动增益（峰值归一）", g >= 20, f"gain={g:.1f}dB")
     tlq = get(f"/api/timeline?path={urllib.parse.quote(quiet)}")
@@ -240,9 +374,23 @@ def main():
             f.write(data)
         w, h = struct.unpack(">II", data[16:24])
         gray = subprocess.run(
-            ["ffmpeg", "-v", "error", "-i", wpng, "-f", "rawvideo", "-pix_fmt", "gray", "-"],
-            capture_output=True).stdout
-        ink = sum(1 for yy in range(h) if any(gray[yy * w + xx] > 40 for xx in range(w)))
+            [
+                "ffmpeg",
+                "-v",
+                "error",
+                "-i",
+                wpng,
+                "-f",
+                "rawvideo",
+                "-pix_fmt",
+                "gray",
+                "-",
+            ],
+            capture_output=True,
+        ).stdout
+        ink = sum(
+            1 for yy in range(h) if any(gray[yy * w + xx] > 40 for xx in range(w))
+        )
         check("波形幅度自动填满（≥85% 高）", ink >= h * 0.85, f"{ink}/{h}")
 
     # 16. 时间线视图数学单元测试（滚轮缩放/平移/播放头跟随/波形铺放）
@@ -250,38 +398,80 @@ def main():
     node = shutil.which("node")
     if node and os.path.isfile(mt):
         r = subprocess.run([node, mt], capture_output=True, text=True)
-        check("timeline_math 单测", r.returncode == 0, (r.stdout + r.stderr).strip().splitlines()[-1] if (r.stdout or r.stderr) else "")
+        check(
+            "timeline_math 单测",
+            r.returncode == 0,
+            (
+                (r.stdout + r.stderr).strip().splitlines()[-1]
+                if (r.stdout or r.stderr)
+                else ""
+            ),
+        )
     else:
         check("timeline_math 单测", False, "node 或测试文件缺失")
 
     # 17. 本地文件浏览器（/api/fs/roots + /api/fs/list）
     roots = get("/api/fs/roots")
-    check("fs/roots 返回盘符", isinstance(roots.get("roots"), list) and len(roots["roots"]) >= 1, str(roots.get("roots")))
+    check(
+        "fs/roots 返回盘符",
+        isinstance(roots.get("roots"), list) and len(roots["roots"]) >= 1,
+        str(roots.get("roots")),
+    )
     tmp_dir = os.path.join(ROOT, "tmp")
     listing = get(f"/api/fs/list?path={urllib.parse.quote(tmp_dir)}")
     names = [e["name"] for e in listing.get("entries", [])]
-    check("fs/list 列出目录", listing.get("path", "").lower() == os.path.normpath(tmp_dir).lower(), listing.get("path"))
+    check(
+        "fs/list 列出目录",
+        listing.get("path", "").lower() == os.path.normpath(tmp_dir).lower(),
+        listing.get("path"),
+    )
     check("fs/list 含媒体文件 sample.mp4", "sample.mp4" in names, f"共 {len(names)} 项")
     sample_entries = [e for e in listing["entries"] if e["name"] == "sample.mp4"]
     if sample_entries:
         e = sample_entries[0]
-        check("媒体项标记 media/size", e.get("media") is True and e.get("size", 0) > 1000, f"media={e.get('media')} size={e.get('size')}")
-    check("fs/list 文件夹优先排序", all(
-        (listing["entries"][i]["isDir"] or not listing["entries"][i + 1]["isDir"])
-        for i in range(len(listing["entries"]) - 1)
-    ) if listing.get("entries") else True)
+        check(
+            "媒体项标记 media/size",
+            e.get("media") is True and e.get("size", 0) > 1000,
+            f"media={e.get('media')} size={e.get('size')}",
+        )
+    check(
+        "fs/list 文件夹优先排序",
+        (
+            all(
+                (
+                    listing["entries"][i]["isDir"]
+                    or not listing["entries"][i + 1]["isDir"]
+                )
+                for i in range(len(listing["entries"]) - 1)
+            )
+            if listing.get("entries")
+            else True
+        ),
+    )
     # 过滤：默认隐藏非媒体文件，all=1 显示
     probe_txt = os.path.join(tmp_dir, "fs_probe_note.txt")
     with open(probe_txt, "w", encoding="utf-8") as f:
         f.write("x")
     listing2 = get(f"/api/fs/list?path={urllib.parse.quote(tmp_dir)}")
-    check("默认过滤非媒体文件", "fs_probe_note.txt" not in [e["name"] for e in listing2["entries"]])
+    check(
+        "默认过滤非媒体文件",
+        "fs_probe_note.txt" not in [e["name"] for e in listing2["entries"]],
+    )
     listing3 = get(f"/api/fs/list?path={urllib.parse.quote(tmp_dir)}&all=1")
-    check("all=1 显示全部文件", "fs_probe_note.txt" in [e["name"] for e in listing3["entries"]])
+    check(
+        "all=1 显示全部文件",
+        "fs_probe_note.txt" in [e["name"] for e in listing3["entries"]],
+    )
     os.remove(probe_txt)
     # 路径清洗：带引号目录可浏览
-    listing4 = get(f"/api/fs/list?path={urllib.parse.quote(chr(34) + tmp_dir + chr(34))}")
-    check("引号目录路径可浏览", listing4.get("total", 0) > 0, f"total={listing4.get('total')}")
+    listing4 = get(
+        f"/api/fs/list?path={urllib.parse.quote(chr(34) + tmp_dir + chr(34))}"
+    )
+    check(
+        "引号目录路径可浏览",
+        listing4.get("total", 0) > 0,
+        f"total={listing4.get('total')}",
+    )
     # 错误路径报「目录不存在」
     err = ""
     try:
