@@ -119,13 +119,27 @@ def run_collect(args, max_buffer: int = 32 * 1024 * 1024) -> str:
     )
     if proc.returncode != 0:
         err = proc.stderr.decode("utf-8", "replace").strip()
-        raise RuntimeError("\n".join(err.splitlines()[-6:]) or f"{' '.join(args[:2])} 退出码 {proc.returncode}")
+        raise RuntimeError(
+            "\n".join(err.splitlines()[-6:])
+            or f"{' '.join(args[:2])} 退出码 {proc.returncode}"
+        )
     out = proc.stdout[:max_buffer].decode("utf-8", "replace")
     return out
 
 
 def probe(file_path: str) -> dict:
-    raw = run_collect([FFPROBE, "-v", "error", "-show_format", "-show_streams", "-of", "json", file_path])
+    raw = run_collect(
+        [
+            FFPROBE,
+            "-v",
+            "error",
+            "-show_format",
+            "-show_streams",
+            "-of",
+            "json",
+            file_path,
+        ]
+    )
     data = json.loads(raw or "{}")
     fmt = data.get("format") or {}
     streams = []
@@ -138,17 +152,24 @@ def probe(file_path: str) -> dict:
             "language": (s.get("tags") or {}).get("language"),
         }
         if s.get("codec_type") == "video":
-            base.update({
-                "width": s.get("width"),
-                "height": s.get("height"),
-                "fps": parse_fps(s.get("avg_frame_rate")) or parse_fps(s.get("r_frame_rate")),
-                "pix_fmt": s.get("pix_fmt"),
-            })
+            base.update(
+                {
+                    "width": s.get("width"),
+                    "height": s.get("height"),
+                    "fps": parse_fps(s.get("avg_frame_rate"))
+                    or parse_fps(s.get("r_frame_rate")),
+                    "pix_fmt": s.get("pix_fmt"),
+                }
+            )
         if s.get("codec_type") == "audio":
-            base.update({
-                "channels": s.get("channels"),
-                "sample_rate": int(s["sample_rate"]) if s.get("sample_rate") else None,
-            })
+            base.update(
+                {
+                    "channels": s.get("channels"),
+                    "sample_rate": (
+                        int(s["sample_rate"]) if s.get("sample_rate") else None
+                    ),
+                }
+            )
         streams.append(base)
 
     def _pick(t):
@@ -172,15 +193,24 @@ def keyframes_near(file_path: str, at: float, window: float = 5.0) -> list:
     end = float(at) + window
     # read_intervals 绝对区间语法：START%END（均为绝对秒）；%+N 形式是相对偏移，勿混用
     interval = f"{start:.3f}%{end:.3f}"
-    raw = run_collect([
-        FFPROBE, "-v", "error",
-        "-select_streams", "v:0",
-        "-skip_frame", "nokey",
-        "-show_entries", "frame=pts_time,pict_type",
-        "-of", "csv=p=0",
-        "-read_intervals", interval,
-        file_path,
-    ])
+    raw = run_collect(
+        [
+            FFPROBE,
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-skip_frame",
+            "nokey",
+            "-show_entries",
+            "frame=pts_time,pict_type",
+            "-of",
+            "csv=p=0",
+            "-read_intervals",
+            interval,
+            file_path,
+        ]
+    )
     frames = []
     for line in raw.splitlines():
         line = line.strip()
@@ -212,8 +242,15 @@ def _temp_file(prefix: str, ext: str) -> str:
 
 
 _AUDIO_EXT = {
-    "aac": ".m4a", "mp3": ".mp3", "opus": ".opus", "vorbis": ".ogg",
-    "flac": ".flac", "ac3": ".ac3", "eac3": ".eac3", "wmav2": ".wma", "pcm_s16le": ".wav",
+    "aac": ".m4a",
+    "mp3": ".mp3",
+    "opus": ".opus",
+    "vorbis": ".ogg",
+    "flac": ".flac",
+    "ac3": ".ac3",
+    "eac3": ".eac3",
+    "wmav2": ".wma",
+    "pcm_s16le": ".wav",
 }
 
 
@@ -252,17 +289,48 @@ def build_command(task: dict) -> dict:
             # 约 1s 负时间戳前摇进输出（内容错位并污染 concat）；输出侧 -ss/-t
             # 按时间戳丢弃，保证音频 copy 也精确。
             pre = max(0.0, start - 2.0)
-            steps.append(g + [
-                "-ss", ff_time(pre), "-i", task["path"], "-ss", ff_time(start - pre), "-t", ff_time(dur),
-                "-c:v", "libx264", "-crf", str(task.get("crf", 18)), "-preset", task.get("preset") or "veryfast",
-                "-c:a", "copy", "-movflags", "+faststart", out_path,
-            ])
+            steps.append(
+                g
+                + [
+                    "-ss",
+                    ff_time(pre),
+                    "-i",
+                    task["path"],
+                    "-ss",
+                    ff_time(start - pre),
+                    "-t",
+                    ff_time(dur),
+                    "-c:v",
+                    "libx264",
+                    "-crf",
+                    str(task.get("crf", 18)),
+                    "-preset",
+                    task.get("preset") or "veryfast",
+                    "-c:a",
+                    "copy",
+                    "-movflags",
+                    "+faststart",
+                    out_path,
+                ]
+            )
         else:
             out_path = _out_path(task["path"], "trim", ".mp4")
-            steps.append(g + [
-                "-ss", ff_time(start), "-i", task["path"], "-t", ff_time(dur),
-                "-c", "copy", "-avoid_negative_ts", "make_zero", out_path,
-            ])
+            steps.append(
+                g
+                + [
+                    "-ss",
+                    ff_time(start),
+                    "-i",
+                    task["path"],
+                    "-t",
+                    ff_time(dur),
+                    "-c",
+                    "copy",
+                    "-avoid_negative_ts",
+                    "make_zero",
+                    out_path,
+                ]
+            )
 
     elif t == "cut-middle":
         in_p = float(task.get("in") or 0)
@@ -283,21 +351,64 @@ def build_command(task: dict) -> dict:
             if task.get("mode") == "precise":
                 # 同 trim 精确：输入侧粗跳 + 输出侧精修，避免音频 copy 负时间戳前摇
                 pre = max(0.0, s - 2.0)
-                steps.append(g + [
-                    "-ss", ff_time(pre), "-i", task["path"], "-ss", ff_time(s - pre), "-t", ff_time(e - s),
-                    "-c:v", "libx264", "-crf", str(task.get("crf", 18)), "-preset", task.get("preset") or "veryfast",
-                    "-c:a", "copy", seg,
-                ])
+                steps.append(
+                    g
+                    + [
+                        "-ss",
+                        ff_time(pre),
+                        "-i",
+                        task["path"],
+                        "-ss",
+                        ff_time(s - pre),
+                        "-t",
+                        ff_time(e - s),
+                        "-c:v",
+                        "libx264",
+                        "-crf",
+                        str(task.get("crf", 18)),
+                        "-preset",
+                        task.get("preset") or "veryfast",
+                        "-c:a",
+                        "copy",
+                        seg,
+                    ]
+                )
             else:
-                steps.append(g + [
-                    "-ss", ff_time(s), "-i", task["path"], "-t", ff_time(e - s),
-                    "-c", "copy", "-avoid_negative_ts", "make_zero", seg,
-                ])
+                steps.append(
+                    g
+                    + [
+                        "-ss",
+                        ff_time(s),
+                        "-i",
+                        task["path"],
+                        "-t",
+                        ff_time(e - s),
+                        "-c",
+                        "copy",
+                        "-avoid_negative_ts",
+                        "make_zero",
+                        seg,
+                    ]
+                )
             seg_files.append(seg)
         out_path = _out_path(task["path"], "cutmiddle", ".mp4")
         lst = _concat_list(seg_files)
-        steps.append(g + ["-f", "concat", "-safe", "0", "-i", lst, "-c", "copy",
-                          "-avoid_negative_ts", "make_zero", out_path])
+        steps.append(
+            g
+            + [
+                "-f",
+                "concat",
+                "-safe",
+                "0",
+                "-i",
+                lst,
+                "-c",
+                "copy",
+                "-avoid_negative_ts",
+                "make_zero",
+                out_path,
+            ]
+        )
 
     elif t == "concat":
         paths = [str(p).strip() for p in (task.get("paths") or []) if str(p).strip()]
@@ -307,15 +418,46 @@ def build_command(task: dict) -> dict:
         if task.get("mode") == "transcode":
             out_path = _out_path(paths[0], "concat_tc", ".mp4")
             # 视频统一转码，音频一律 stream copy
-            steps.append(g + [
-                "-f", "concat", "-safe", "0", "-i", lst,
-                "-c:v", "libx264", "-crf", str(task.get("crf", 20)), "-preset", task.get("preset") or "medium",
-                "-c:a", "copy", "-movflags", "+faststart", out_path,
-            ])
+            steps.append(
+                g
+                + [
+                    "-f",
+                    "concat",
+                    "-safe",
+                    "0",
+                    "-i",
+                    lst,
+                    "-c:v",
+                    "libx264",
+                    "-crf",
+                    str(task.get("crf", 20)),
+                    "-preset",
+                    task.get("preset") or "medium",
+                    "-c:a",
+                    "copy",
+                    "-movflags",
+                    "+faststart",
+                    out_path,
+                ]
+            )
         else:
             out_path = _out_path(paths[0], "concat", ".mp4")
-            steps.append(g + ["-f", "concat", "-safe", "0", "-i", lst, "-c", "copy",
-                              "-avoid_negative_ts", "make_zero", out_path])
+            steps.append(
+                g
+                + [
+                    "-f",
+                    "concat",
+                    "-safe",
+                    "0",
+                    "-i",
+                    lst,
+                    "-c",
+                    "copy",
+                    "-avoid_negative_ts",
+                    "make_zero",
+                    out_path,
+                ]
+            )
 
     elif t == "audio":
         if task.get("action") == "extract":
@@ -330,8 +472,20 @@ def build_command(task: dict) -> dict:
     elif t == "frame":
         fmt = "png" if task.get("format") == "png" else "jpg"
         out_path = _out_path(task["path"], "frame", f".{fmt}")
-        steps.append(g + ["-ss", ff_time(float(task.get("time") or 0)), "-i", task["path"],
-                          "-frames:v", "1", "-q:v", "2", out_path])
+        steps.append(
+            g
+            + [
+                "-ss",
+                ff_time(float(task.get("time") or 0)),
+                "-i",
+                task["path"],
+                "-frames:v",
+                "1",
+                "-q:v",
+                "2",
+                out_path,
+            ]
+        )
 
     elif t == "transcode":
         fmt = "webm" if task.get("format") == "webm" else "mp4"
@@ -341,10 +495,29 @@ def build_command(task: dict) -> dict:
             args += ["-vf", f"scale=-2:{int(task['scale'])}"]
         # 视频重编码，音频一律 stream copy
         if fmt == "webm":
-            args += ["-c:v", "libvpx-vp9", "-crf", str(task.get("crf", 32)), "-b:v", "0", "-c:a", "copy"]
+            args += [
+                "-c:v",
+                "libvpx-vp9",
+                "-crf",
+                str(task.get("crf", 32)),
+                "-b:v",
+                "0",
+                "-c:a",
+                "copy",
+            ]
         else:
-            args += ["-c:v", "libx264", "-crf", str(task.get("crf", 23)), "-preset", task.get("preset") or "medium",
-                     "-c:a", "copy", "-movflags", "+faststart"]
+            args += [
+                "-c:v",
+                "libx264",
+                "-crf",
+                str(task.get("crf", 23)),
+                "-preset",
+                task.get("preset") or "medium",
+                "-c:a",
+                "copy",
+                "-movflags",
+                "+faststart",
+            ]
         args.append(out_path)
         steps.append(args)
 
@@ -409,6 +582,7 @@ class StepRunner:
                     del stderr_chunks[: len(stderr_chunks) // 2]
 
         import threading
+
         t_err = threading.Thread(target=read_stderr, daemon=True)
         t_err.start()
 
@@ -428,12 +602,14 @@ class StepRunner:
             elif key == "progress" and self.on_progress:
                 out_time = (out_us or 0) / 1e6
                 progress = min(1.0, out_time / self.duration) if self.duration else None
-                self.on_progress({
-                    "stepIndex": index,
-                    "stepCount": total,
-                    "progress": progress,
-                    "outTime": out_time,
-                })
+                self.on_progress(
+                    {
+                        "stepIndex": index,
+                        "stepCount": total,
+                        "progress": progress,
+                        "outTime": out_time,
+                    }
+                )
 
         proc.stdout.close()
         code = proc.wait()
@@ -442,7 +618,31 @@ class StepRunner:
             if self._cancelled:
                 raise RuntimeError("任务已取消")
             err = b"".join(stderr_chunks).decode("utf-8", "replace").strip()
-            raise RuntimeError("\n".join(err.splitlines()[-8:]) or f"ffmpeg 退出码 {code}")
+            raise RuntimeError(
+                "\n".join(err.splitlines()[-8:]) or f"ffmpeg 退出码 {code}"
+            )
+
+
+# 时间线波形分辨率：宽度按时长等比例放大（每半小时 4000px），深度缩放浏览时
+# 横向清晰度恒定（列宽只取决于可见窗口，不再随整段时长被摊薄）；高度固定，
+# 供 CSS 纵向拉伸填满。
+WAVE_HEIGHT = 400
+WAVE_SECONDS_PER_IMAGE = 30 * 60  # 一幅图的基准时长（半小时）
+WAVE_WIDTH_BASE = 4000  # 该时长对应的横向像素
+WAVE_MIN_WIDTH = 1000  # 短视频保底宽度
+WAVE_MAX_WIDTH = 20000  # 最大宽度
+
+
+def _wave_width(duration: float) -> int:
+    """按时长计算波形图横向像素（时长未知时回落基准宽度）。"""
+    if not duration or duration <= 0:
+        return WAVE_WIDTH_BASE
+    return min(
+        max(
+            WAVE_MIN_WIDTH,
+            int(round(duration / WAVE_SECONDS_PER_IMAGE * WAVE_WIDTH_BASE)),
+        ),
+    )
 
 
 def wave_gain_db(file_path: str) -> float:
@@ -453,13 +653,29 @@ def wave_gain_db(file_path: str) -> float:
     """
     try:
         proc = subprocess.run(
-            [FFMPEG, "-hide_banner", "-nostdin", "-i", file_path,
-             "-map", "0:a:0", "-af", "volumedetect", "-f", "null", "-"],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, **_popen_flags(),
+            [
+                FFMPEG,
+                "-hide_banner",
+                "-nostdin",
+                "-i",
+                file_path,
+                "-map",
+                "0:a:0",
+                "-af",
+                "volumedetect",
+                "-f",
+                "null",
+                "-",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            **_popen_flags(),
         )
     except Exception:
         return 0.0
-    m = re.search(r"max_volume:\s*(-inf|-?[\d.]+)\s*dB", proc.stderr.decode("utf-8", "replace"))
+    m = re.search(
+        r"max_volume:\s*(-inf|-?[\d.]+)\s*dB", proc.stderr.decode("utf-8", "replace")
+    )
     if not m or m.group(1) == "-inf":
         return 0.0
     return max(0.0, min(-float(m.group(1)), 60.0))
@@ -472,15 +688,28 @@ def _wave_band(png_file: str, w: int, h: int) -> tuple[int, int]:
     CSS 拉伸，波形自动填满时间线高度；文件内相对动态保留。
     """
     proc = subprocess.run(
-        [FFMPEG, "-v", "error", "-i", png_file, "-f", "rawvideo", "-pix_fmt", "gray", "-"],
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, **_popen_flags(),
+        [
+            FFMPEG,
+            "-v",
+            "error",
+            "-i",
+            png_file,
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "gray",
+            "-",
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        **_popen_flags(),
     )
     raw = proc.stdout
     if len(raw) < w * h:
         raise RuntimeError("波形图解码失败")
     top = bottom = None
     for yy in range(h):
-        row = raw[yy * w:(yy + 1) * w]
+        row = raw[yy * w : (yy + 1) * w]
         if any(p > 40 for p in row):
             if top is None:
                 top = yy
@@ -489,7 +718,7 @@ def _wave_band(png_file: str, w: int, h: int) -> tuple[int, int]:
         return 0, h  # 全黑（纯静音）→ 不裁切
     mid = (h - 1) / 2
     half = max(bottom - mid, mid - top) + 2
-    half = max(half, 16.0)   # 纯平线不过度放大
+    half = max(half, 16.0)  # 纯平线不过度放大
     half = min(half, h / 2)
     y = int(round(mid - half))
     hh = int(round(2 * half))
@@ -504,24 +733,52 @@ def build_timeline_assets(file_path: str) -> dict:
     幅度自动缩放：先按峰值归一（安静录音自动放大），再按内容裁切填满显示。
     """
     st = os.stat(file_path)
-    # wave4：波形自动增益 + 内容裁切，与旧缓存区分
-    key = hashlib.sha1(f"wave4|{file_path}|{st.st_size}|{st.st_mtime}".encode()).hexdigest()[:16]
+    # wave5：波形按时长等比的动态分辨率 + 自动增益 + 内容裁切，与旧缓存区分
+    key = hashlib.sha1(
+        f"wave5|{file_path}|{st.st_size}|{st.st_mtime}".encode()
+    ).hexdigest()[:16]
     wave_file = CACHE_DIR / f"{key}_wave.png"
     raw_file = CACHE_DIR / f"{key}_wave_raw.png"
 
     if not wave_file.exists():
         try:
+            info = probe(file_path)
+            w = _wave_width(info.get("duration") or 0)
             gain = wave_gain_db(file_path)
-            run_collect([
-                FFMPEG, "-y", "-hide_banner", "-nostdin", "-i", file_path,
-                "-filter_complex", f"volume={gain:.2f}dB,showwavespic=s=1600x160:colors=#378ADD",
-                "-frames:v", "1", str(raw_file),
-            ], 8 * 1024 * 1024)
-            y, hh = _wave_band(str(raw_file), 1600, 160)
-            run_collect([
-                FFMPEG, "-y", "-hide_banner", "-nostdin", "-i", str(raw_file),
-                "-vf", f"crop=1600:{hh}:0:{y}", str(wave_file),
-            ], 8 * 1024 * 1024)
+            run_collect(
+                [
+                    FFMPEG,
+                    "-y",
+                    "-hide_banner",
+                    "-nostdin",
+                    "-i",
+                    file_path,
+                    # showwavespic 需整段音频缓冲，先降采样/降位深/转单声道压内存
+                    "-filter_complex",
+                    f"volume={gain:.2f}dB,aresample=16000,aformat=sample_fmts=s16:channel_layouts=mono,showwavespic=s={w}x{WAVE_HEIGHT}:colors=#378ADD",
+                    "-frames:v",
+                    "1",
+                    "-update",
+                    "1",
+                    str(raw_file),
+                ],
+                8 * 1024 * 1024,
+            )
+            y, hh = _wave_band(str(raw_file), w, WAVE_HEIGHT)
+            run_collect(
+                [
+                    FFMPEG,
+                    "-y",
+                    "-hide_banner",
+                    "-nostdin",
+                    "-i",
+                    str(raw_file),
+                    "-vf",
+                    f"crop={w}:{hh}:0:{y}",
+                    str(wave_file),
+                ],
+                8 * 1024 * 1024,
+            )
             raw_file.unlink(missing_ok=True)
         except Exception:
             pass  # 无音轨 → 无波形
