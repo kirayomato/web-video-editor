@@ -191,18 +191,25 @@ def ff_time(sec: float) -> str:
     return f"{h:02d}:{m:02d}:{part:06.3f}"
 
 
-def run_collect(
-    args, max_buffer: int = 32 * 1024 * 1024, serial: bool = True
-) -> str:
-    """执行命令并收集 stdout（用于 ffprobe/短命令）。
-
-    serial=False 给只读探测用：ffprobe 只解析容器头、不占多核，
-    与长任务并行几乎不争 CPU，不必排在锁后等几秒。
-    """
-    if not serial:
-        return _run_collect(args, max_buffer)
+def run_collect(args, max_buffer: int = 32 * 1024 * 1024) -> str:
+    """执行 ffmpeg 命令并收集 stdout（短命令）。"""
     with proc_slot(PROC_WAIT):
         return _run_collect(args, max_buffer)
+
+
+# 只读探测独立排队：转码期间仍要能读元数据，但自身串行，
+# 快速切换文件时不会同时拉起一堆 ffprobe。
+_PROBE_LOCK = threading.RLock()
+
+
+def run_probe(args, max_buffer: int = 32 * 1024 * 1024) -> str:
+    """执行只读探测命令（ffprobe / ffmpeg -version），不占 ffmpeg 槽位。"""
+    if not _PROBE_LOCK.acquire(timeout=PROC_WAIT):
+        raise FfmpegBusy("探测队列繁忙，请稍后重试")
+    try:
+        return _run_collect(args, max_buffer)
+    finally:
+        _PROBE_LOCK.release()
 
 
 def _run_collect(args, max_buffer: int) -> str:
@@ -224,7 +231,7 @@ def _run_collect(args, max_buffer: int) -> str:
 
 @_coalesce("probe")
 def probe(file_path: str) -> dict:
-    raw = run_collect(
+    raw = run_probe(
         [
             FFPROBE,
             "-v",
@@ -234,8 +241,7 @@ def probe(file_path: str) -> dict:
             "-of",
             "json",
             file_path,
-        ],
-        serial=False,
+        ]
     )
     data = json.loads(raw or "{}")
     fmt = data.get("format") or {}
@@ -291,7 +297,7 @@ def keyframes_near(file_path: str, at: float, window: float = 5.0) -> list:
     end = float(at) + window
     # read_intervals 绝对区间语法：START%END（均为绝对秒）；%+N 形式是相对偏移，勿混用
     interval = f"{start:.3f}%{end:.3f}"
-    raw = run_collect(
+    raw = run_probe(
         [
             FFPROBE,
             "-v",
@@ -307,8 +313,7 @@ def keyframes_near(file_path: str, at: float, window: float = 5.0) -> list:
             "-read_intervals",
             interval,
             file_path,
-        ],
-        serial=False,
+        ]
     )
     frames = []
     for line in raw.splitlines():
@@ -964,7 +969,7 @@ def audio_only_cache(file_path: str) -> str:
 
 def ffmpeg_version() -> str:
     try:
-        out = run_collect([FFMPEG, "-version"], 4 * 1024 * 1024, serial=False)
+        out = run_probe([FFMPEG, "-version"], 4 * 1024 * 1024)
         return out.splitlines()[0]
     except Exception as e:
         return f"不可用: {e}"
