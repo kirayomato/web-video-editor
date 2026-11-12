@@ -18,6 +18,7 @@
     tasks: {},
     cursor: 0, // 播放头位置：未加载播放器时由时间线点击/方向键驱动
     playerEnabled: false, // 是否加载浏览器播放器；默认 false = 仅用 ffmpeg 读元数据
+    audioOnly: false, // 当前播放器是否使用纯音频流
   };
 
   const $ = (id) => document.getElementById(id);
@@ -140,7 +141,7 @@
 
     // 默认不加载浏览器播放器：仅保留 ffmpeg 元数据，剪辑照常可用。
     // 用户点过「加载播放器」后（playerEnabled=true）才在换文件时自动加载预览。
-    if (state.playerEnabled) initPlayer(path);
+    if (state.playerEnabled) initPlayer(path, state.audioOnly);
     else showPlayerPlaceholder();
     syncSelectionUI();
     // 仅在有有效时长时生成时间线波形（读取失败时跳过，避免覆盖上面的警告）
@@ -197,6 +198,16 @@
   // ---------------- 播放器模式（按需加载） ----------------
   let placeholderHTML = '';
 
+  function updatePlayerBar() {
+    $('loadPlayerBtn').textContent = state.playerEnabled ? '卸载播放器' : '加载播放器';
+    $('audioOnlyBtn').textContent = state.audioOnly ? '恢复画面' : '仅听声';
+    $('playerModeHint').textContent = state.audioOnly
+      ? '仅听声模式：播放纯音频流，不下载视频轨'
+      : state.playerEnabled
+        ? '播放器已加载；点击「卸载播放器」可回到仅元数据模式'
+        : '仅用 ffmpeg 读取元数据，未加载播放器（可正常剪辑）';
+  }
+
   // 仅元数据模式：销毁播放器、显示占位。占位节点从 HTML 缓存一次，之后复用。
   function showPlayerPlaceholder() {
     const container = $('artplayer');
@@ -208,25 +219,25 @@
     }
     container.innerHTML = placeholderHTML || '<div class="player-placeholder"></div>';
     state.playerEnabled = false;
-    $('loadPlayerBtn').textContent = '加载播放器';
-    $('playerModeHint').textContent = '仅用 ffmpeg 读取元数据，未加载播放器（可正常剪辑）';
+    state.audioOnly = false;
+    updatePlayerBar();
   }
 
-  function loadPlayer() {
+  function loadPlayer(audioOnly) {
     if (!state.path) return err('请先载入视频文件');
     if (typeof Artplayer === 'undefined') {
       return err('ArtPlayer 未加载，请检查 public/vendor/artplayer.js');
     }
     try {
-      initPlayer(state.path);
+      initPlayer(state.path, audioOnly);
     } catch (e) {
       showPlayerPlaceholder();
       return err('播放器加载失败：' + e.message);
     }
     if (!state.art) { showPlayerPlaceholder(); return; }
     state.playerEnabled = true;
-    $('loadPlayerBtn').textContent = '卸载播放器';
-    $('playerModeHint').textContent = '播放器已加载；点击「卸载播放器」可回到仅元数据模式';
+    state.audioOnly = !!audioOnly;
+    updatePlayerBar();
   }
 
   function togglePlayer() {
@@ -234,12 +245,16 @@
       showPlayerPlaceholder();
       status('已卸载播放器，回到仅元数据模式', 'ok');
     } else {
-      loadPlayer();
+      loadPlayer(false);
     }
   }
 
+  function toggleAudioOnly() {
+    loadPlayer(!state.audioOnly);
+  }
+
   // ---------------- 播放器 ----------------
-  function initPlayer(path) {
+  function initPlayer(path, audioOnly) {
     const container = $('artplayer');
     if (state.art) {
       try { state.art.destroy(); } catch (_) { /* ignore */ }
@@ -250,7 +265,8 @@
       err('ArtPlayer 未加载，请检查 public/vendor/artplayer.js');
       return;
     }
-    const url = '/api/media?path=' + encodeURIComponent(path);
+    const url = '/api/media?path=' + encodeURIComponent(path)
+      + (audioOnly ? '&audio=1' : '');
     const art = new Artplayer({
       container: '#artplayer',
       url,
@@ -258,10 +274,11 @@
       theme: '#378add',
       autoplay: false,
       playbackRate: true,
-      aspectRatio: true,
+      // 纯音频资源没有 videoWidth/videoHeight，比例与画中画选项需关闭
+      aspectRatio: !audioOnly,
       fullscreen: true,
       fullscreenWeb: true,
-      pip: true,
+      pip: !audioOnly,
       setting: true,
       hotkey: false,
       lock: true,
@@ -1097,6 +1114,7 @@
     $('refreshTasksBtn').addEventListener('click', refreshTasks);
     $('cleanupBtn').addEventListener('click', cleanupOld);
     $('loadPlayerBtn').addEventListener('click', togglePlayer);
+    $('audioOnlyBtn').addEventListener('click', toggleAudioOnly);
 
     bindTimeline();
     bindHotkeys();

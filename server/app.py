@@ -25,6 +25,7 @@ from ffmpeg_ops import (  # noqa: E402
     UPLOAD_DIR,
     assert_local_dir,
     assert_local_path,
+    audio_only_cache,
     build_timeline_assets,
     clean_path_str,
     ffmpeg_version,
@@ -54,6 +55,12 @@ MIME = {
     ".m4a": "audio/mp4",
     ".mp3": "audio/mpeg",
     ".wav": "audio/wav",
+    ".ogg": "audio/ogg",
+    ".opus": "audio/ogg",
+    ".flac": "audio/flac",
+    ".ac3": "audio/ac3",
+    ".eac3": "audio/eac3",
+    ".wma": "audio/x-ms-wma",
     ".mov": "video/quicktime",
     ".mkv": "video/x-matroska",
     ".txt": "text/plain; charset=utf-8",
@@ -349,7 +356,11 @@ class Handler(BaseHTTPRequestHandler):
 
         if p == "/api/media" and method in ("GET", "HEAD"):
             try:
-                return self._serve_file(assert_local_path(q.get("path")))
+                file_path = assert_local_path(q.get("path"))
+                audio_only = (q.get("audio") or "").lower() in ("1", "true", "yes")
+                if audio_only:
+                    file_path = audio_only_cache(file_path)
+                return self._serve_file(file_path)
             except Exception as e:
                 return self._error(400, str(e))
 

@@ -731,12 +731,15 @@ def _wave_band(png_file: str, w: int, h: int) -> tuple[int, int]:
 def build_timeline_assets(file_path: str) -> dict:
     """生成时间线波形素材（时间线只显示音频波形；点击跳转由前端处理）。
 
+    波形输入用纯音频缓存，避免对原视频重复 demux；时长取自源文件，
+    音轨比视频轨短时波形宽度不跟着缩。缓存生成失败时回退原文件。
     幅度自动缩放：先按峰值归一（安静录音自动放大），再按内容裁切填满显示。
     返回结构带 reason 字段：ok（命中缓存或生成成功）/
     no_audio（无音轨）/ failed（有音轨但生成失败，附 error 明细）。
     """
     st = os.stat(file_path)
     # wave5：波形按时长等比的动态分辨率 + 自动增益 + 内容裁切，与旧缓存区分
+    # key 绑定源文件：音轨是直拷，音频数据不变，已有波形缓存可直接命中
     key = hashlib.sha1(
         f"wave5|{file_path}|{st.st_size}|{st.st_mtime}".encode()
     ).hexdigest()[:16]
@@ -750,9 +753,15 @@ def build_timeline_assets(file_path: str) -> dict:
     if not info.get("audio"):
         return {"wave": None, "reason": "no_audio"}
 
+    # 源编码无法直拷进目标容器时退回原文件，波形仍能生成
+    try:
+        audio_file = audio_only_cache(file_path)
+    except Exception:
+        audio_file = file_path
+
     try:
         w = _wave_width(info.get("duration") or 0)
-        gain = wave_gain_db(file_path)
+        gain = wave_gain_db(audio_file)
         run_collect(
             [
                 FFMPEG,
@@ -760,7 +769,7 @@ def build_timeline_assets(file_path: str) -> dict:
                 "-hide_banner",
                 "-nostdin",
                 "-i",
-                file_path,
+                audio_file,
                 # showwavespic 需整段音频缓冲，先降采样/降位深/转单声道压内存
                 "-filter_complex",
                 f"volume={gain:.2f}dB,aresample=16000,aformat=sample_fmts=s16:channel_layouts=mono,showwavespic=s={w}x{WAVE_HEIGHT}:colors=#378ADD",
@@ -795,6 +804,53 @@ def build_timeline_assets(file_path: str) -> dict:
         "wave": f"/api/cache/{wave_file.name}" if wave_file.exists() else None,
         "reason": "ok" if wave_file.exists() else "failed",
     }
+
+
+def audio_only_cache(file_path: str) -> str:
+    """返回仅含音轨的缓存文件，不存在时按源编码直拷生成。
+
+    容器由源音轨编码决定，避免重编码；mp4 系容器把 moov 移到文件头，
+    使浏览器在下载完成前即可起播。缓存 key 绑定源文件大小与修改时间。
+    """
+    st = os.stat(file_path)
+    key = hashlib.sha1(
+        f"audio1|{file_path}|{st.st_size}|{st.st_mtime}".encode()
+    ).hexdigest()[:16]
+    cached = sorted(CACHE_DIR.glob(f"{key}_audio.*"))
+    if cached:
+        return str(cached[0])
+
+    info = probe(file_path)
+    audio = info.get("audio")
+    if not audio:
+        raise ValueError("文件没有音轨")
+
+    ext = _audio_ext(audio.get("codec_name"))
+    # m4a 与 mp4 同为 ISO BMFF 容器，统一用 .mp4 让响应按 video/mp4 发出
+    if ext == ".m4a":
+        ext = ".mp4"
+    tmp = _temp_file("audio", ext)
+    cmd = [
+        FFMPEG,
+        "-y",
+        "-hide_banner",
+        "-nostdin",
+        "-i",
+        file_path,
+        "-vn",
+        "-c:a",
+        "copy",
+    ]
+    if ext in (".mp4", ".m4a", ".mov"):
+        cmd += ["-movflags", "+faststart"]
+    cmd.append(tmp)
+    try:
+        run_collect(cmd, 8 * 1024 * 1024)
+        out = CACHE_DIR / f"{key}_audio{ext}"
+        os.replace(tmp, out)
+        return str(out)
+    finally:
+        Path(tmp).unlink(missing_ok=True)
 
 
 def ffmpeg_version() -> str:
