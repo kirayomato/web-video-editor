@@ -392,8 +392,56 @@
     wave.rows = h;
   }
 
-  // 一个设备像素一列：缩小时取覆盖范围内的上下最值（不丢峰值），放大时同一列
-  // 重复铺开成竖条（不插值）。横向落在整数设备像素上，避免灰边。
+  // 刻度步长取让相邻标签至少隔开 80px 的整齐值，缩放/平移后刻度密度自适应
+  const RULER_STEPS = [0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 1800, 3600];
+
+  function rulerLabel(t, step) {
+    if (step < 0.1) return t.toFixed(2) + 's';
+    if (step < 1) return t.toFixed(1) + 's';
+    const s = Math.round(t);
+    return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+  }
+
+  function drawRuler(ctx, pw, ph, rulerH, vs, ve, dpr) {
+    const span = ve - vs;
+    const widthCss = pw / dpr;
+    const step = RULER_STEPS.find((s) => s / span * widthCss >= 80) || RULER_STEPS[RULER_STEPS.length - 1];
+    const hair = Math.max(1, Math.round(dpr));
+    ctx.fillStyle = '#f1f4f8';
+    ctx.fillRect(0, 0, pw, rulerH);
+    ctx.fillStyle = '#e2e5ea';
+    ctx.fillRect(0, rulerH - hair, pw, hair);
+
+    ctx.font = `${11 * dpr}px "Segoe UI", system-ui, sans-serif`;
+    ctx.textBaseline = 'middle';
+    ctx.textAlign = 'left';
+    ctx.lineWidth = hair;
+    for (let t = Math.ceil(vs / step - 1e-6) * step; t <= ve + 1e-6; t += step) {
+      const x = Math.round((t - vs) / span * pw) + 0.5;
+      if (x < 0 || x > pw) continue;
+      ctx.strokeStyle = '#eef1f5';
+      ctx.beginPath();
+      ctx.moveTo(x, rulerH);
+      ctx.lineTo(x, ph);
+      ctx.stroke();
+      ctx.strokeStyle = '#aab6c4';
+      ctx.beginPath();
+      ctx.moveTo(x, rulerH - 6 * dpr);
+      ctx.lineTo(x, rulerH);
+      ctx.stroke();
+      ctx.fillStyle = '#8892a0';
+      ctx.fillText(rulerLabel(t, step), x + 4 * dpr, rulerH / 2);
+    }
+    ctx.strokeStyle = '#d8dee7';
+    const midY = Math.round((rulerH + ph) / 2) + 0.5;
+    ctx.beginPath();
+    ctx.moveTo(0, midY);
+    ctx.lineTo(pw, midY);
+    ctx.stroke();
+  }
+
+  // 每 2 个 CSS 像素一根竖条，条间留缝；缩小时取覆盖列的上下最值（不丢峰值），
+  // 放大时同一列重复铺开（不插值）。外层为峰值包络，内层按中线收缩模拟能量层。
   function drawWave() {
     const canvas = $('tlWaveCanvas');
     if (!canvas) return;
@@ -407,18 +455,25 @@
     }
     const ctx = canvas.getContext('2d');
     ctx.clearRect(0, 0, pw, ph);
-    if (!wave.cols || !(state.duration > 0)) return;
+    if (!(state.duration > 0)) return;
 
     const [vs, ve] = view();
     const span = ve - vs;
     if (!(span > 0)) return;
 
+    const rulerH = Math.round(20 * dpr);
+    drawRuler(ctx, pw, ph, rulerH, vs, ve, dpr);
+    if (!wave.cols) return;
+
+    const waveH = ph - rulerH;
+    const midRow = wave.rows / 2;
     const colAtLeft = vs / state.duration * wave.cols;
     const colsPerPx = span / state.duration * wave.cols / pw;
-    ctx.fillStyle = '#378ADD';
-    for (let x = 0; x < pw; x++) {
+    const stride = Math.max(2, Math.round(2 * dpr));
+    const barW = Math.max(1, stride - Math.max(1, Math.round(0.6 * dpr)));
+    for (let x = 0; x < pw; x += stride) {
       const c0 = Math.floor(colAtLeft + x * colsPerPx);
-      const c1 = Math.max(c0 + 1, Math.floor(colAtLeft + (x + 1) * colsPerPx));
+      const c1 = Math.max(c0 + 1, Math.floor(colAtLeft + (x + stride) * colsPerPx));
       let t = wave.rows;
       let b = -1;
       for (let c = c0; c < c1; c++) {
@@ -427,9 +482,14 @@
         if (wave.bottom[c] > b) b = wave.bottom[c];
       }
       if (b < 0) continue;
-      const y = t / wave.rows * ph;
-      const hh = Math.max(1, (b + 1) / wave.rows * ph - y);
-      ctx.fillRect(x, Math.min(y, ph - hh), 1, hh);
+      const y = rulerH + t / wave.rows * waveH;
+      const hh = Math.max(1, rulerH + (b + 1) / wave.rows * waveH - y);
+      ctx.fillStyle = '#185FA5';
+      ctx.fillRect(x, y, barW, hh);
+      const iy = rulerH + (midRow + (t - midRow) * 0.45) / wave.rows * waveH;
+      const ih = Math.max(1, rulerH + (midRow + (b - midRow) * 0.45 + 1) / wave.rows * waveH - iy);
+      ctx.fillStyle = '#0C447C';
+      ctx.fillRect(x, iy, barW, ih);
     }
   }
 

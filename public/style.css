@@ -118,12 +118,12 @@ main {
 
 .timeline {
   position: relative;
-  /* 时间线垂直高度 */
-  height: 100px;
+  /* 波形区高度 = 总高 - 顶部 20px 刻度带 */
+  height: 112px;
   border: 1px solid var(--border);
   border-radius: 8px;
   overflow: hidden;
-  background: #111418;
+  background: #f8fafc;
   cursor: crosshair;
   user-select: none;
 }
@@ -131,7 +131,6 @@ main {
 .tl-wave {
   position: absolute;
   inset: 0;
-  background-color: #1a222c;
 }
 
 .tl-wave canvas {
@@ -142,9 +141,9 @@ main {
 
 .tl-selection {
   position: absolute;
-  top: 0;
+  top: 20px;
   bottom: 0;
-  background: rgba(55, 138, 221, 0.28);
+  background: rgba(55, 138, 221, 0.1);
   border-left: 2px solid var(--accent);
   border-right: 2px solid var(--accent);
   pointer-events: none;
@@ -152,31 +151,50 @@ main {
 
 .tl-handle {
   position: absolute;
-  top: 0;
+  top: 20px;
   bottom: 0;
-  width: 10px;
-  margin-left: -5px;
+  width: 12px;
+  margin-left: -6px;
   cursor: ew-resize;
 }
 .tl-handle::after {
   content: "";
   position: absolute;
-  left: 4px;
+  left: 5px;
   top: 0;
   bottom: 0;
   width: 2px;
   background: var(--accent);
 }
+.tl-handle::before {
+  content: "";
+  position: absolute;
+  left: 2px;
+  top: 0;
+  width: 8px;
+  height: 10px;
+  border-radius: 0 0 3px 3px;
+  background: var(--accent);
+}
 
 .tl-head {
   position: absolute;
-  top: 0;
+  top: 20px;
   bottom: 0;
   width: 2px;
   margin-left: -1px;
-  background: #ffffff;
+  background: #042c53;
   pointer-events: none;
-  box-shadow: 0 0 4px rgba(0, 0, 0, 0.6);
+}
+.tl-head::before {
+  content: "";
+  position: absolute;
+  top: -7px;
+  left: -4px;
+  width: 10px;
+  height: 7px;
+  background: #042c53;
+  clip-path: polygon(0 0, 100% 0, 50% 100%);
 }
 
 .timeline-controls {
