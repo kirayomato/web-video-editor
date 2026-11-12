@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import json
 import os
@@ -9,7 +10,9 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -28,6 +31,85 @@ CREATE_NO_WINDOW = 0x08000000 if IS_WIN else 0
 
 def _popen_flags():
     return {"creationflags": CREATE_NO_WINDOW} if IS_WIN else {}
+
+
+# ---------- 进程并发控制 ----------
+# 同一时刻只允许一个 ffmpeg/ffprobe 子进程：并发会互相抢 CPU，
+# 转码/波形这类吃满多核的命令叠加后总耗时反而更长。
+# 可重入：一次请求内会连续调用多条命令（探测→缓存→波形），
+# 每条命令各自持锁、结束即释放，不跨调用持有。
+_PROC_LOCK = threading.RLock()
+# 拿不到锁的最大等待秒数，超时按"忙"处理，避免请求无限挂起
+PROC_WAIT = float(os.environ.get("FFMPEG_WAIT") or 10)
+
+
+class FfmpegBusy(RuntimeError):
+    """等待 ffmpeg 空闲超时。"""
+
+
+@contextmanager
+def proc_slot(timeout=None):
+    """独占 ffmpeg 子进程槽位；timeout 为 None 表示一直等。"""
+    if not _PROC_LOCK.acquire(timeout=-1 if timeout is None else timeout):
+        raise FfmpegBusy("ffmpeg 正忙（另有任务在执行），请稍后重试")
+    try:
+        yield
+    finally:
+        _PROC_LOCK.release()
+
+
+# 同一文件同一操作的并发调用合并为一次执行，其余调用共享返回值/异常。
+# 快速切换文件或反复拖动入点时，上一轮波形还没算完，新请求直接等结果。
+_flight_lock = threading.Lock()
+_flights: dict[str, dict] = {}
+
+
+def single_flight(key: str, fn):
+    with _flight_lock:
+        slot = _flights.get(key)
+        owner = slot is None
+        if owner:
+            slot = {"event": threading.Event(), "value": None, "error": None}
+            _flights[key] = slot
+    if not owner:
+        slot["event"].wait()
+        if slot["error"] is not None:
+            raise slot["error"]
+        return slot["value"]
+    try:
+        slot["value"] = fn()
+        return slot["value"]
+    except BaseException as e:
+        slot["error"] = e
+        raise
+    finally:
+        with _flight_lock:
+            _flights.pop(key, None)
+        slot["event"].set()
+
+
+def _file_key(tag: str, file_path: str, extra: str = "") -> str:
+    """缓存/合并键：tag + 路径 + 大小 + 修改时间，文件被覆盖后自然失效。"""
+    try:
+        st = os.stat(file_path)
+        stamp = f"{st.st_size}|{st.st_mtime}"
+    except OSError:
+        stamp = "-"
+    return f"{tag}|{file_path}|{stamp}|{extra}"
+
+
+def _coalesce(tag: str):
+    """把 file_path 相同的并发调用合并成一次执行。"""
+    def deco(fn):
+        @functools.wraps(fn)
+        def wrapper(file_path, *args, **kwargs):
+            extra = f"{args!r}|{sorted(kwargs.items())!r}"
+            key = _file_key(tag, file_path, extra)
+            return single_flight(key, lambda: fn(file_path, *args, **kwargs))
+
+        return wrapper
+
+    return deco
 
 
 _QUOTE_CHARS = "\"'“”‘’«»"
@@ -109,8 +191,21 @@ def ff_time(sec: float) -> str:
     return f"{h:02d}:{m:02d}:{part:06.3f}"
 
 
-def run_collect(args, max_buffer: int = 32 * 1024 * 1024) -> str:
-    """执行命令并收集 stdout（用于 ffprobe/短命令）。"""
+def run_collect(
+    args, max_buffer: int = 32 * 1024 * 1024, serial: bool = True
+) -> str:
+    """执行命令并收集 stdout（用于 ffprobe/短命令）。
+
+    serial=False 给只读探测用：ffprobe 只解析容器头、不占多核，
+    与长任务并行几乎不争 CPU，不必排在锁后等几秒。
+    """
+    if not serial:
+        return _run_collect(args, max_buffer)
+    with proc_slot(PROC_WAIT):
+        return _run_collect(args, max_buffer)
+
+
+def _run_collect(args, max_buffer: int) -> str:
     proc = subprocess.run(
         args,
         stdout=subprocess.PIPE,
@@ -127,6 +222,7 @@ def run_collect(args, max_buffer: int = 32 * 1024 * 1024) -> str:
     return out
 
 
+@_coalesce("probe")
 def probe(file_path: str) -> dict:
     raw = run_collect(
         [
@@ -138,7 +234,8 @@ def probe(file_path: str) -> dict:
             "-of",
             "json",
             file_path,
-        ]
+        ],
+        serial=False,
     )
     data = json.loads(raw or "{}")
     fmt = data.get("format") or {}
@@ -188,6 +285,7 @@ def probe(file_path: str) -> dict:
     }
 
 
+@_coalesce("keyframes")
 def keyframes_near(file_path: str, at: float, window: float = 5.0) -> list:
     start = max(0.0, float(at) - window)
     end = float(at) + window
@@ -209,7 +307,8 @@ def keyframes_near(file_path: str, at: float, window: float = 5.0) -> list:
             "-read_intervals",
             interval,
             file_path,
-        ]
+        ],
+        serial=False,
     )
     frames = []
     for line in raw.splitlines():
@@ -558,10 +657,14 @@ class StepRunner:
                 pass
 
     def run(self):
-        total = len(self.steps)
-        for i, args in enumerate(self.steps):
-            self._run_one(args, i, total, is_last=(i == total - 1))
-        return {"ok": True}
+        # 整个任务执行期间独占 ffmpeg 槽位（不设等待上限：任务已由队列调度，
+        # 不应因其他短命令占用而被丢弃）。跨步骤也持有，避免探测/波形插入
+        # 多步任务的中间态。
+        with proc_slot(None):
+            total = len(self.steps)
+            for i, args in enumerate(self.steps):
+                self._run_one(args, i, total, is_last=(i == total - 1))
+            return {"ok": True}
 
     def _run_one(self, args, index, total, is_last):
         cmd = ["-progress", "pipe:1", "-nostats"] + args
@@ -653,25 +756,28 @@ def wave_gain_db(file_path: str) -> float:
     增益上限 60dB，防止近乎静音的噪底被拉爆。
     """
     try:
-        proc = subprocess.run(
-            [
-                FFMPEG,
-                "-hide_banner",
-                "-nostdin",
-                "-i",
-                file_path,
-                "-map",
-                "0:a:0",
-                "-af",
-                "volumedetect",
-                "-f",
-                "null",
-                "-",
-            ],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            **_popen_flags(),
-        )
+        with proc_slot(PROC_WAIT):
+            proc = subprocess.run(
+                [
+                    FFMPEG,
+                    "-hide_banner",
+                    "-nostdin",
+                    "-i",
+                    file_path,
+                    "-map",
+                    "0:a:0",
+                    "-af",
+                    "volumedetect",
+                    "-f",
+                    "null",
+                    "-",
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                **_popen_flags(),
+            )
+    except FfmpegBusy:
+        raise
     except Exception:
         return 0.0
     m = re.search(
@@ -688,23 +794,24 @@ def _wave_band(png_file: str, w: int, h: int) -> tuple[int, int]:
     showwavespic 的幅度映射有固有余量（0dBFS ≈ 64% 高），裁切后由
     CSS 拉伸，波形自动填满时间线高度；文件内相对动态保留。
     """
-    proc = subprocess.run(
-        [
-            FFMPEG,
-            "-v",
-            "error",
-            "-i",
-            png_file,
-            "-f",
-            "rawvideo",
-            "-pix_fmt",
-            "gray",
-            "-",
-        ],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        **_popen_flags(),
-    )
+    with proc_slot(PROC_WAIT):
+        proc = subprocess.run(
+            [
+                FFMPEG,
+                "-v",
+                "error",
+                "-i",
+                png_file,
+                "-f",
+                "rawvideo",
+                "-pix_fmt",
+                "gray",
+                "-",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            **_popen_flags(),
+        )
     raw = proc.stdout
     if len(raw) < w * h:
         raise RuntimeError("波形图解码失败")
@@ -728,6 +835,7 @@ def _wave_band(png_file: str, w: int, h: int) -> tuple[int, int]:
     return (y, hh) if hh >= 2 else (0, h)
 
 
+@_coalesce("wave")
 def build_timeline_assets(file_path: str) -> dict:
     """生成时间线波形素材（时间线只显示音频波形；点击跳转由前端处理）。
 
@@ -806,6 +914,7 @@ def build_timeline_assets(file_path: str) -> dict:
     }
 
 
+@_coalesce("audio")
 def audio_only_cache(file_path: str) -> str:
     """返回仅含音轨的缓存文件，不存在时按源编码直拷生成。
 
@@ -855,7 +964,7 @@ def audio_only_cache(file_path: str) -> str:
 
 def ffmpeg_version() -> str:
     try:
-        out = run_collect([FFMPEG, "-version"], 4 * 1024 * 1024)
+        out = run_collect([FFMPEG, "-version"], 4 * 1024 * 1024, serial=False)
         return out.splitlines()[0]
     except Exception as e:
         return f"不可用: {e}"

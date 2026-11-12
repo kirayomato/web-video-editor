@@ -23,6 +23,7 @@ from ffmpeg_ops import (  # noqa: E402
     FFPROBE,
     OUT_DIR,
     UPLOAD_DIR,
+    FfmpegBusy,
     assert_local_dir,
     assert_local_path,
     audio_only_cache,
@@ -179,6 +180,10 @@ class Handler(BaseHTTPRequestHandler):
     def _error(self, code: int, message: str):
         self._json(code, {"error": message})
 
+    def _fail(self, e: Exception, code: int = 400):
+        """ffmpeg 槽位等不到时按 503 返回，与参数错误区分开。"""
+        return self._error(503 if isinstance(e, FfmpegBusy) else code, str(e))
+
     def _read_body(self, limit: int = 1024 * 1024) -> bytes:
         length = int(self.headers.get("Content-Length") or 0)
         if length > limit:
@@ -324,7 +329,7 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 return self._json(200, probe(assert_local_path(q.get("path"))))
             except Exception as e:
-                return self._error(400, str(e))
+                return self._fail(e)
 
         if p == "/api/keyframes" and method == "GET":
             try:
@@ -333,14 +338,14 @@ class Handler(BaseHTTPRequestHandler):
                 win = float(q.get("window") or 5)
                 return self._json(200, {"frames": keyframes_near(file_path, at, win)})
             except Exception as e:
-                return self._error(400, str(e))
+                return self._fail(e)
 
         if p == "/api/timeline" and method == "GET":
             try:
                 file_path = assert_local_path(q.get("path"))
                 return self._json(200, build_timeline_assets(file_path))
             except Exception as e:
-                return self._error(400, str(e))
+                return self._fail(e)
 
         if p == "/api/fs/roots" and method == "GET":
             return self._json(
@@ -362,7 +367,7 @@ class Handler(BaseHTTPRequestHandler):
                     file_path = audio_only_cache(file_path)
                 return self._serve_file(file_path)
             except Exception as e:
-                return self._error(400, str(e))
+                return self._fail(e)
 
         if p == "/api/download" and method in ("GET", "HEAD"):
             try:
