@@ -506,9 +506,12 @@ def main():
     check("audio=1 未就绪返回 503", code == 503 and "尚未就绪" in err, f"{code} {err[:40]}")
     # 轮询到就绪
     st = {}
+    first_pending = None
     t0 = time.time()
     while time.time() - t0 < 60:
         st = get(f"/api/prepare?path={penc}")
+        if first_pending is None and not st.get("ready"):
+            first_pending = dict(st)
         if st.get("ready"):
             break
         if st.get("error") or st.get("cancelled"):
@@ -516,6 +519,17 @@ def main():
         time.sleep(0.3)
     check("prepare 轮询就绪", st.get("ready") is True, str(st)[:120])
     check("prepare 进度到 1", st.get("progress") == 1.0, str(st.get("progress")))
+    # 未就绪响应必须带 phase/elapsed：前端状态栏靠它显示阶段 + 「已用 Xs」。
+    # -c:a copy 抽音轨时 ffmpeg 只在流拷完报一次进度，没有这两个字段
+    # 前端就只能干等一个不动的 0%。
+    check(
+        "prepare 返回阶段与耗时",
+        first_pending is not None
+        and first_pending.get("phase") in ("queued", "probe", "extract", "finalize")
+        and isinstance(first_pending.get("elapsed"), (int, float))
+        and first_pending["elapsed"] >= 0,
+        str(first_pending)[:120],
+    )
     # 就绪后 audio=1 可访问
     body = get(f"/api/media?path={penc}&audio=1", raw=True)
     check("audio=1 就绪后可播", len(body) > 1000, f"{len(body)} bytes")

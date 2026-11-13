@@ -116,14 +116,39 @@
   function showPrepareUI(on) {
     $('prepareBox').hidden = !on;
     $('cancelPrepareBtn').disabled = false;
-    if (on) setPrepareProgress(0);
+    if (on) setPrepareProgress(null);
   }
 
   function setPrepareProgress(pct) {
+    const bar = $('prepareProgress');
+    if (pct == null) {
+      // 不确定态：-c:a copy 抽音轨时 ffmpeg 只在流拷完才报一次进度，
+      // 全程拿不到中间值，用滚动动画表示「在跑」而不是死钉 0%
+      bar.removeAttribute('value');
+      $('preparePercent').textContent = '…';
+      $('playerModeHint').textContent = '正在准备纯音频…';
+      return;
+    }
     const v = Math.max(0, Math.min(100, Math.round(pct)));
-    $('prepareProgress').value = v;
+    bar.value = v;
     $('preparePercent').textContent = v + '%';
     $('playerModeHint').textContent = `正在准备纯音频… ${v}%`;
+  }
+
+  const PREPARE_PHASE_TEXT = {
+    queued: '排队',
+    probe: '探测音频信息',
+    extract: '抽取音轨',
+    finalize: '写入缓存',
+  };
+
+  // 状态栏文案：阶段 + 已用耗时。耗时每次轮询都在涨，即使百分比不动
+  // （copy 模式拿不到中间进度）也能看出任务在推进。
+  function prepareStatusText(res) {
+    const phase = PREPARE_PHASE_TEXT[res.phase] || '准备中';
+    const secs = Number(res.elapsed || 0).toFixed(1);
+    const pct = res.progress > 0 ? `${Math.round(res.progress * 100)}%，` : '';
+    return `正在准备纯音频（${phase}）… ${pct}已用 ${secs}s，完成后自动加载播放器…`;
   }
 
   // 短请求轮询后台抽音轨状态；返回 null 表示本次准备已作废，调用方应丢弃结果
@@ -150,8 +175,10 @@
         status('音轨抽取失败，未加载播放器；点「仅听声」可重试：' + res.error, 'warn');
         return false;
       }
-      setPrepareProgress((res.progress || 0) * 100);
-      status(`正在准备纯音频… ${Math.round((res.progress || 0) * 100)}%，完成后自动加载播放器…`);
+      const p = res.progress || 0;
+      // 0 表示还没有可信百分比（copy 模式全程如此），交给不确定态动画
+      setPrepareProgress(p > 0 ? p * 100 : null);
+      status(prepareStatusText(res));
       await new Promise((resolve) => setTimeout(resolve, PREPARE_INTERVAL_MS));
     }
     try {
@@ -165,7 +192,7 @@
     prepareCancelled = false;
     showPlayerPlaceholder();
     showPrepareUI(true);
-    status('正在准备纯音频… 0%，完成后自动加载播放器…');
+    status('正在准备纯音频… 完成后自动加载播放器…');
     const ready = await prepareAudio(path, token, restart);
     if (prepareCancelled || token !== prepareToken || ready === null) return;
     showPrepareUI(false);
@@ -174,6 +201,7 @@
       return;
     }
     state.audioReady = true;
+    status('音轨就绪，正在加载播放器…');
     loadPlayer(!keepVideo);
     // 音轨缓存就绪后才生成波形，波形直接吃缓存，不再扫完整源视频
     loadTimelineAssets(path, state.duration);
@@ -258,12 +286,15 @@
   }
 
   async function loadTimelineAssets(path, duration) {
+    status('正在生成波形…');
     try {
       const assets = await api(`/api/timeline?path=${encodeURIComponent(path)}&duration=${duration || 0}`);
       resetWave();
       if (assets.wave) {
         try {
           await loadWaveEnvelope(assets.wave);
+          // 成功路径必须落一条终态文案，否则状态栏会一直挂着上一条「正在准备…」
+          status('就绪', 'ok');
         } catch (e) {
           status('波形解码失败：' + e.message + '，时间线仍可点击跳转', 'error');
         }

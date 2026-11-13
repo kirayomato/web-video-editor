@@ -1013,6 +1013,11 @@ def _new_prepare_slot() -> dict:
         "cancel": False,
         "cancelled": False,
         "progress": 0.0,
+        # 阶段供前端展示：queued / probe / extract / finalize。
+        # -c:a copy 时 ffmpeg 只在整个流拷完才输出一次 progress，
+        # 百分比长期停在 0，前端要靠阶段 + 耗时才能看出「在动」。
+        "phase": "queued",
+        "started": time.monotonic(),
         "done": threading.Event(),
     }
 
@@ -1055,6 +1060,8 @@ def prepare_audio_cache(file_path: str, restart: bool = False) -> dict:
         return {
             "ready": False,
             "progress": slot["progress"],
+            "phase": slot["phase"],
+            "elapsed": round(time.monotonic() - slot["started"], 1),
             "error": slot["error"],
             "cancelled": slot["cancelled"] or slot["cancel"],
         }
@@ -1087,6 +1094,10 @@ def audio_only_cache(file_path: str) -> str:
         return cached
     key = _audio_cache_key(file_path)
 
+    # 阶段只用于 /api/prepare 的前端提示；其他调用路径没有 slot 时跳过
+    slot = _AUDIO_PREPARING.get(key)
+    if slot is not None:
+        slot["phase"] = "probe"
     info = probe(file_path)
     audio = info.get("audio")
     if not audio:
@@ -1114,13 +1125,15 @@ def audio_only_cache(file_path: str) -> str:
     if ext in (".mp4", ".m4a", ".mov"):
         cmd += ["-movflags", "+faststart"]
     cmd.append(tmp)
-    slot = _AUDIO_PREPARING.get(key)
     try:
         CACHE_DIR.mkdir(parents=True, exist_ok=True)
         if slot is None:
             run_collect(cmd, 8 * 1024 * 1024)
         else:
+            slot["phase"] = "extract"
             run_progress(cmd, info.get("duration") or 0, slot)
+        if slot is not None:
+            slot["phase"] = "finalize"
         out = CACHE_DIR / f"{key}_audio{ext}"
         os.replace(tmp, out)
         return str(out)
