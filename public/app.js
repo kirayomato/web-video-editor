@@ -109,6 +109,8 @@
   // ---------------- 加载文件 ----------------
   let prepareToken = 0;
   let prepareCancelled = false;
+  // 波形请求代次：切换文件时自增，作废在途的旧文件波形响应
+  let waveToken = 0;
   const PREPARE_INTERVAL_MS = 800;
   const PREPARE_TIMEOUT_MS = 10 * 60 * 1000;
   const PREPARE_MAX_POLLS = Math.ceil(PREPARE_TIMEOUT_MS / PREPARE_INTERVAL_MS);
@@ -212,6 +214,13 @@
     if (!path) { err('请提供视频文件路径'); return; }
     const token = ++prepareToken;
     state.audioReady = false;
+    // 换文件立刻清掉上一个视频的波形、尺子和选区残留：波形要等 /api/timeline
+    // 返回才有新的，若拖到那时才清，整个探测/准备期间都会挂着旧波形。
+    // 同时自增代次，作废仍在途的旧文件波形请求（否则旧响应会把新画布重新画满）。
+    ++waveToken;
+    state.duration = 0;
+    resetWave();
+    applyWaveView();
     // 关键：先记下路径——即使 ffprobe / 浏览器播放失败，也要保证后续 ffmpeg 剪辑可用
     state.path = path;
     state.name = name || path.split(/[\\/]/).pop() || 'video';
@@ -247,6 +256,9 @@
     }
 
     syncSelectionUI();
+    // 新时长先把标尺画上（波形此刻为空，等 loadTimelineAssets 填充）；
+    // 探测失败的分支 duration=0，drawWave 只清空画布，不影响警告文案
+    applyWaveView();
     // 读取失败时跳过，避免覆盖上面的警告
     if (state.duration <= 0) { showPlayerPlaceholder(); return; }
 
@@ -286,16 +298,22 @@
   }
 
   async function loadTimelineAssets(path, duration) {
+    const token = ++waveToken;
     status('正在生成波形…');
     try {
       const assets = await api(`/api/timeline?path=${encodeURIComponent(path)}&duration=${duration || 0}`);
+      // 期间用户已切到别的文件：丢弃这次结果，否则旧波形会盖在新画布上
+      if (token !== waveToken) return;
       resetWave();
       if (assets.wave) {
         try {
-          await loadWaveEnvelope(assets.wave);
+          const env = await loadWaveEnvelope(assets.wave);
+          if (token !== waveToken) return;
+          setWaveEnvelope(env);
           // 成功路径必须落一条终态文案，否则状态栏会一直挂着上一条「正在准备…」
           status('就绪', 'ok');
         } catch (e) {
+          if (token !== waveToken) return;
           status('波形解码失败：' + e.message + '，时间线仍可点击跳转', 'error');
         }
       } else if (assets.reason === 'no_audio') {
@@ -307,6 +325,7 @@
       }
       applyWaveView();
     } catch (e) {
+      if (token !== waveToken) return;
       resetWave();
       applyWaveView();
       status('时间线素材生成失败：' + e.message, 'error');
@@ -494,13 +513,19 @@
     wave.rows = 0;
   }
 
+  function setWaveEnvelope(env) {
+    wave.top = env.top;
+    wave.bottom = env.bottom;
+    wave.cols = env.cols;
+    wave.rows = env.rows;
+  }
+
   function loadWaveEnvelope(url) {
     return new Promise((resolve, reject) => {
       const img = new Image();
       img.onload = () => {
         try {
-          extractEnvelope(img);
-          resolve();
+          resolve(extractEnvelope(img));
         } catch (e) {
           reject(e);
         }
@@ -510,7 +535,9 @@
     });
   }
 
-  // 逐列取笔画上下沿；无笔画的静音列落在中线，退化成一条细线
+  // 逐列取笔画上下沿；无笔画的静音列落在中线，退化成一条细线。
+  // 只返回包络、不写全局 wave：图片异步解码，换文件后旧图仍会 onload，
+  // 直接写全局会让旧波形在之后任意一次重绘里冒出来。落库交给调用方按代次判断。
   function extractEnvelope(img) {
     const w = img.naturalWidth;
     const h = img.naturalHeight;
@@ -535,10 +562,7 @@
       top[x] = t < 0 ? mid : t;
       bottom[x] = b < 0 ? mid : b;
     }
-    wave.top = top;
-    wave.bottom = bottom;
-    wave.cols = w;
-    wave.rows = h;
+    return { top, bottom, cols: w, rows: h };
   }
 
   // 刻度步长取让相邻标签至少隔开 80px 的整齐值，缩放/平移后刻度密度自适应

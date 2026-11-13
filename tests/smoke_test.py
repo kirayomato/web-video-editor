@@ -306,6 +306,22 @@ def main():
         "时间线绑定 wheel 缩放",
         "addEventListener('wheel'" in src and "zoomTimeline" in src,
     )
+    # 换文件立刻清旧波形：清空必须在 /api/probe 之前，否则探测+准备期间
+    # 一直挂着上一个视频的波形；同时要靠代次丢弃在途的旧波形响应。
+    fn_start = src.find("async function loadFromPath")
+    fn_end = src.find("function renderMediaInfo", fn_start)
+    fn_body = src[fn_start:fn_end] if 0 <= fn_start < fn_end else ""
+    clear_at = fn_body.find("resetWave()")
+    probe_at = fn_body.find("/api/probe")
+    check(
+        "换文件在探测前清空旧波形",
+        clear_at >= 0 and probe_at >= 0 and clear_at < probe_at,
+        f"resetWave@{clear_at} probe@{probe_at}",
+    )
+    check(
+        "在途旧波形响应按代次丢弃",
+        "++waveToken" in src and "token !== waveToken" in src,
+    )
 
     # 14. 路径清洗（Windows「复制为路径」带引号；中文+空格文件名）
     sp = os.path.join(ROOT, "tmp", "测试 video.mp4")
