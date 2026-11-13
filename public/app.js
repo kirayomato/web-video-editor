@@ -120,8 +120,10 @@
     $('downloadSourceBtn').disabled = false;
 
     status('探测媒体信息…');
+    let hasAudio = false;
     try {
       const info = await api('/api/probe?path=' + encodeURIComponent(path));
+      hasAudio = !!info.audio;
       state.duration = info.duration || 0;
       state.fps = (info.video && info.video.fps) || 30;
       state.outPoint = state.duration;
@@ -139,9 +141,10 @@
       status(`⚠ 无法读取媒体信息（${e.message}），但仍可用 ffmpeg 剪辑；请在右侧手动填写入/出点区间。`, 'warn');
     }
 
-    // 默认不加载浏览器播放器：仅保留 ffmpeg 元数据，剪辑照常可用。
-    // 用户点过「加载播放器」后（playerEnabled=true）才在换文件时自动加载预览。
+    // 有音轨时默认播纯音频流：视频轨不进入浏览器，需要画面时点「恢复画面」。
+    // 播放器请求即触发音轨抽取，波形请求随后命中同一份缓存。
     if (state.playerEnabled) initPlayer(path, state.audioOnly);
+    else if (state.duration > 0) loadPlayer(hasAudio);
     else showPlayerPlaceholder();
     syncSelectionUI();
     // 仅在有有效时长时生成时间线波形（读取失败时跳过，避免覆盖上面的警告）
