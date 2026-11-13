@@ -151,7 +151,7 @@
         return false;
       }
       setPrepareProgress((res.progress || 0) * 100);
-      if (i === 0) status('正在准备纯音频，完成后自动加载播放器…');
+      status(`正在准备纯音频… ${Math.round((res.progress || 0) * 100)}%，完成后自动加载播放器…`);
       await new Promise((resolve) => setTimeout(resolve, PREPARE_INTERVAL_MS));
     }
     try {
@@ -165,6 +165,7 @@
     prepareCancelled = false;
     showPlayerPlaceholder();
     showPrepareUI(true);
+    status('正在准备纯音频… 0%，完成后自动加载播放器…');
     const ready = await prepareAudio(path, token, restart);
     if (prepareCancelled || token !== prepareToken || ready === null) return;
     showPrepareUI(false);
