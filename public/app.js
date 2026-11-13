@@ -17,8 +17,10 @@
     pendingFile: null,
     tasks: {},
     cursor: 0, // 播放头位置：未加载播放器时由时间线点击/方向键驱动
+    scrubPos: null, // 拖动时间线时的预览位置；非 null 时光标显示此值，不写播放器
     playerEnabled: false, // 是否加载浏览器播放器；默认 false = 仅用 ffmpeg 读元数据
     audioOnly: false, // 当前播放器是否使用纯音频流
+    audioReady: false, // 纯音频缓存是否就绪，决定切仅听声能否直接设 src
   };
 
   const $ = (id) => document.getElementById(id);
@@ -105,9 +107,82 @@
   }
 
   // ---------------- 加载文件 ----------------
+  let prepareToken = 0;
+  let prepareCancelled = false;
+  const PREPARE_INTERVAL_MS = 800;
+  const PREPARE_TIMEOUT_MS = 10 * 60 * 1000;
+  const PREPARE_MAX_POLLS = Math.ceil(PREPARE_TIMEOUT_MS / PREPARE_INTERVAL_MS);
+
+  function showPrepareUI(on) {
+    $('prepareBox').hidden = !on;
+    $('cancelPrepareBtn').disabled = false;
+    if (on) setPrepareProgress(0);
+  }
+
+  function setPrepareProgress(pct) {
+    const v = Math.max(0, Math.min(100, Math.round(pct)));
+    $('prepareProgress').value = v;
+    $('preparePercent').textContent = v + '%';
+    $('playerModeHint').textContent = `正在准备纯音频… ${v}%`;
+  }
+
+  // 短请求轮询后台抽音轨状态；返回 null 表示本次准备已作废，调用方应丢弃结果
+  async function prepareAudio(path, token, restart = false) {
+    const url = '/api/prepare?path=' + encodeURIComponent(path);
+    const firstUrl = restart ? url + '&restart=1' : url;
+    for (let i = 0; i < PREPARE_MAX_POLLS; i++) {
+      if (prepareCancelled || token !== prepareToken) return null;
+      let res;
+      try {
+        res = await api(i === 0 ? firstUrl : url);
+      } catch (e) {
+        if (prepareCancelled || token !== prepareToken) return null;
+        status('音频准备请求失败，未加载播放器：' + e.message, 'warn');
+        return false;
+      }
+      if (prepareCancelled || token !== prepareToken) return null;
+      if (res.ready) { setPrepareProgress(100); return true; }
+      if (res.cancelled) {
+        status('音轨准备已终止，未加载播放器；点「仅听声」可重新准备', 'warn');
+        return false;
+      }
+      if (res.error) {
+        status('音轨抽取失败，未加载播放器；点「仅听声」可重试：' + res.error, 'warn');
+        return false;
+      }
+      setPrepareProgress((res.progress || 0) * 100);
+      if (i === 0) status('正在准备纯音频，完成后自动加载播放器…');
+      await new Promise((resolve) => setTimeout(resolve, PREPARE_INTERVAL_MS));
+    }
+    try {
+      await api('/api/prepare/cancel?path=' + encodeURIComponent(path), { method: 'POST' });
+    } catch (_) { /* 终止失败时状态栏仍给出提示，不阻断后续重试 */ }
+    status(`音轨准备超时（${PREPARE_TIMEOUT_MS / 60000} 分钟），已终止后台抽取；点「仅听声」可重试`, 'warn');
+    return false;
+  }
+
+  async function prepareAndPlay(path, keepVideo, restart, token) {
+    prepareCancelled = false;
+    showPlayerPlaceholder();
+    showPrepareUI(true);
+    const ready = await prepareAudio(path, token, restart);
+    if (prepareCancelled || token !== prepareToken || ready === null) return;
+    showPrepareUI(false);
+    if (ready !== true) {
+      $('playerModeHint').textContent = '纯音频未就绪，未加载播放器；可点「仅听声」重试';
+      return;
+    }
+    state.audioReady = true;
+    loadPlayer(!keepVideo);
+    // 音轨缓存就绪后才生成波形，波形直接吃缓存，不再扫完整源视频
+    loadTimelineAssets(path, state.duration);
+  }
+
   async function loadFromPath(path, name) {
     path = cleanPath(path);
     if (!path) { err('请提供视频文件路径'); return; }
+    const token = ++prepareToken;
+    state.audioReady = false;
     // 关键：先记下路径——即使 ffprobe / 浏览器播放失败，也要保证后续 ffmpeg 剪辑可用
     state.path = path;
     state.name = name || path.split(/[\\/]/).pop() || 'video';
@@ -116,6 +191,7 @@
     state.viewStart = 0;
     state.viewEnd = 0;
     state.cursor = 0;
+    state.scrubPos = null;
     $('pathInput').value = path;
     $('downloadSourceBtn').disabled = false;
 
@@ -141,14 +217,19 @@
       status(`⚠ 无法读取媒体信息（${e.message}），但仍可用 ffmpeg 剪辑；请在右侧手动填写入/出点区间。`, 'warn');
     }
 
-    // 有音轨时默认播纯音频流：视频轨不进入浏览器，需要画面时点「恢复画面」。
-    // 播放器请求即触发音轨抽取，波形请求随后命中同一份缓存。
-    if (state.playerEnabled) initPlayer(path, state.audioOnly);
-    else if (state.duration > 0) loadPlayer(hasAudio);
-    else showPlayerPlaceholder();
     syncSelectionUI();
-    // 仅在有有效时长时生成时间线波形（读取失败时跳过，避免覆盖上面的警告）
-    if (state.duration > 0) loadTimelineAssets(path, state.duration);
+    // 读取失败时跳过，避免覆盖上面的警告
+    if (state.duration <= 0) { showPlayerPlaceholder(); return; }
+
+    // 视频模式是用户显式选的，换文件时保持；其余情况默认只听声
+    const keepVideo = state.playerEnabled && !state.audioOnly;
+    if (!hasAudio) {
+      showPrepareUI(false);
+      loadPlayer(false);
+      loadTimelineAssets(path, state.duration);
+      return;
+    }
+    prepareAndPlay(path, keepVideo, false, token);
   }
 
   function renderMediaInfo(info) {
@@ -248,12 +329,23 @@
       showPlayerPlaceholder();
       status('已卸载播放器，回到仅元数据模式', 'ok');
     } else {
+      ++prepareToken;
+      showPrepareUI(false);
       loadPlayer(false);
     }
   }
 
   function toggleAudioOnly() {
-    loadPlayer(!state.audioOnly);
+    if (!$('prepareBox').hidden) return;
+    if (state.audioOnly) {
+      ++prepareToken;
+      showPrepareUI(false);
+      loadPlayer(false);
+      return;
+    }
+    if (state.audioReady) { loadPlayer(true); return; }
+    if (!state.path) return err('请先载入视频文件');
+    prepareAndPlay(state.path, false, true, ++prepareToken);
   }
 
   // ---------------- 播放器 ----------------
@@ -290,11 +382,11 @@
     state.art = art;
 
     art.on('video:timeupdate', () => {
-      state.cursor = art.currentTime || 0; // 同步光标，切回仅元数据模式时保留位置
+      // 拖动预览期间光标由 scrubPos 决定，不被播放位置覆盖
+      if (state.scrubPos === null) state.cursor = art.currentTime || 0;
       updateTimeUI();
       ensurePlayheadVisible(); // 缩放后播放头离开可见窗口时把窗口拉回
-      const t = art.currentTime || 0;
-      $('frameTime').textContent = fmtTime(t);
+      $('frameTime').textContent = fmtTime(currentTime());
     });
     art.on('video:loadedmetadata', () => updateTimeUI());
     art.on('error', (e, retry) => reportPlaybackError(art, url, retry));
@@ -302,6 +394,8 @@
   }
 
   function currentTime() {
+    // 拖动预览优先：光标显示的是用户正在拖的位置，播放器实际位置还没动
+    if (state.scrubPos !== null) return state.scrubPos;
     // 加载了播放器时随真实播放位置；否则用独立光标（时间线点击/方向键驱动）
     return (state.art && Number.isFinite(state.art.currentTime)) ? state.art.currentTime : state.cursor;
   }
@@ -313,6 +407,24 @@
     if (state.art) state.art.seek = v;
     updateTimeUI();
     ensurePlayheadVisible();
+  }
+
+  // 拖动时间线：只移动光标，不写播放器。
+  // 每次写 video.currentTime 都会让浏览器中止旧 Range 请求并重发，
+  // 拖一次就是几十个请求；松手时统一跳一次即可。
+  function scrubTo(t) {
+    const v = Math.max(0, Math.min(state.duration || t, t));
+    state.scrubPos = v;
+    state.cursor = v;
+    updateTimeUI();
+    ensurePlayheadVisible();
+  }
+
+  function endScrub() {
+    if (state.scrubPos === null) return;
+    const v = state.scrubPos;
+    state.scrubPos = null;
+    seek(v); // 真正跳转：整段拖动只产生一次媒体请求
   }
 
   function frameStep(dir) {
@@ -653,7 +765,8 @@
       else if (target.id === 'handleOut') dragging = 'out';
       else {
         dragging = 'scrub';
-        seek(timeAt(e.clientX));
+        // 只移动光标；真正跳转推迟到 mouseup，避免连续拖动产生请求风暴
+        scrubTo(timeAt(e.clientX));
       }
       e.preventDefault();
     });
@@ -661,12 +774,20 @@
     window.addEventListener('mousemove', (e) => {
       if (!dragging) return;
       const t = timeAt(e.clientX);
-      if (dragging === 'scrub') seek(t);
+      if (dragging === 'scrub') scrubTo(t);
       else if (dragging === 'in') setIn(t);
       else if (dragging === 'out') setOut(t);
     });
 
-    window.addEventListener('mouseup', () => { dragging = null; });
+    window.addEventListener('mouseup', () => {
+      if (dragging === 'scrub') endScrub();
+      dragging = null;
+    });
+    // 拖到窗口外松手时收尾，否则预览位置会一直卡住
+    document.addEventListener('mouseleave', () => {
+      if (dragging === 'scrub') endScrub();
+      dragging = null;
+    });
 
     // 滚轮缩放：以当前播放位置为中心（播放位置在窗口外则拉回居中）
     // Shift+滚轮 / 触控板横向滑动：平移视图
@@ -1178,6 +1299,19 @@
     $('cleanupBtn').addEventListener('click', cleanupOld);
     $('loadPlayerBtn').addEventListener('click', togglePlayer);
     $('audioOnlyBtn').addEventListener('click', toggleAudioOnly);
+    $('cancelPrepareBtn').addEventListener('click', async () => {
+      if ($('prepareBox').hidden || !state.path) return;
+      prepareCancelled = true;
+      $('cancelPrepareBtn').disabled = true;
+      try {
+        await api('/api/prepare/cancel?path=' + encodeURIComponent(state.path), { method: 'POST' });
+        status('已终止音轨准备，未加载播放器；点「仅听声」可重新准备', 'warn');
+      } catch (e) {
+        status('终止音轨准备失败：' + e.message, 'error');
+      }
+      showPrepareUI(false);
+      $('playerModeHint').textContent = '音轨准备已终止，未加载播放器';
+    });
 
     bindTimeline();
     bindHotkeys();

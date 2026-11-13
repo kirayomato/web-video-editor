@@ -197,6 +197,65 @@ def run_collect(args, max_buffer: int = 32 * 1024 * 1024) -> str:
         return _run_collect(args, max_buffer)
 
 
+class AudioPrepareCancelled(RuntimeError):
+    """抽音轨被终止。"""
+
+
+def run_progress(args, duration: float, slot: dict) -> None:
+    """执行长命令并把进度写进 slot；slot["cancel"] 置位时终止子进程。
+
+    stderr 由独立线程排空，避免管道写满后子进程卡在日志输出上。
+    """
+    with proc_slot(PROC_WAIT):
+        if slot.get("cancel"):
+            raise AudioPrepareCancelled("已终止")
+        proc = subprocess.Popen(
+            args,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            **_popen_flags(),
+        )
+        slot["proc"] = proc
+        err_lines: list[str] = []
+
+        def drain_stderr():
+            for line in proc.stderr:
+                err_lines.append(line.decode("utf-8", "replace").strip())
+
+        reader = threading.Thread(target=drain_stderr, daemon=True)
+        reader.start()
+        cancelled = False
+        for raw in proc.stdout:
+            if slot.get("cancel"):
+                proc.kill()
+                cancelled = True
+                break
+            line = raw.decode("utf-8", "replace").strip()
+            if "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            if k in ("out_time_us", "out_time_ms"):
+                try:
+                    t = float(v)
+                except ValueError:
+                    continue
+                denom = duration * (1e6 if k == "out_time_us" else 1e3)
+                if denom > 0:
+                    slot["progress"] = min(0.99, max(slot["progress"], t / denom))
+            elif k == "progress" and v == "end":
+                slot["progress"] = 1.0
+        proc.wait()
+        reader.join(timeout=2)
+        slot.pop("proc", None)
+        if cancelled or slot.get("cancel"):
+            raise AudioPrepareCancelled("已终止")
+        if proc.returncode != 0:
+            raise RuntimeError(
+                "\n".join(err_lines[-6:]) or f"ffmpeg 退出码 {proc.returncode}"
+            )
+        slot["progress"] = 1.0
+
+
 # 只读探测独立排队：转码期间仍要能读元数据，但自身串行，
 # 快速切换文件时不会同时拉起一堆 ffprobe。
 _PROBE_LOCK = threading.RLock()
@@ -844,8 +903,8 @@ def _wave_band(png_file: str, w: int, h: int) -> tuple[int, int]:
 def build_timeline_assets(file_path: str) -> dict:
     """生成时间线波形素材（时间线只显示音频波形；点击跳转由前端处理）。
 
-    波形输入用纯音频缓存，避免对原视频重复 demux；时长取自源文件，
-    音轨比视频轨短时波形宽度不跟着缩。缓存生成失败时回退原文件。
+    波形输入用已就绪的纯音频缓存，避免对原视频重复 demux；时长取自源文件，
+    音轨比视频轨短时波形宽度不跟着缩。缓存未就绪时读原文件。
     幅度自动缩放：先按峰值归一（安静录音自动放大），再按内容裁切填满显示。
     返回结构带 reason 字段：ok（命中缓存或生成成功）/
     no_audio（无音轨）/ failed（有音轨但生成失败，附 error 明细）。
@@ -866,13 +925,11 @@ def build_timeline_assets(file_path: str) -> dict:
     if not info.get("audio"):
         return {"wave": None, "reason": "no_audio"}
 
-    # 源编码无法直拷进目标容器时退回原文件，波形仍能生成
-    try:
-        audio_file = audio_only_cache(file_path)
-    except Exception:
-        audio_file = file_path
+    # 音轨抽取由载入流程负责；缓存未就绪时读原文件，波形不阻塞在抽取上
+    audio_file = audio_cached_file(file_path) or file_path
 
     try:
+        CACHE_DIR.mkdir(parents=True, exist_ok=True)
         w = _wave_width(info.get("duration") or 0)
         gain = wave_gain_db(audio_file)
         run_collect(
@@ -919,6 +976,94 @@ def build_timeline_assets(file_path: str) -> dict:
     }
 
 
+def _audio_cache_key(file_path: str) -> str:
+    """音频缓存键：绑定源文件大小与修改时间，文件被覆盖后自然失效。"""
+    st = os.stat(file_path)
+    return hashlib.sha1(
+        f"audio1|{file_path}|{st.st_size}|{st.st_mtime}".encode()
+    ).hexdigest()[:16]
+
+
+def audio_cached_file(file_path: str) -> str | None:
+    """只查音频缓存，不触发抽取。"""
+    cached = sorted(CACHE_DIR.glob(f"{_audio_cache_key(file_path)}_audio.*"))
+    return str(cached[0]) if cached else None
+
+
+# 抽音轨要顺序扫完整个源文件，留在请求线程里会让媒体连接长时间无响应。
+# 后台生成后由短请求查状态，避免连接空窗被中间网络重置。
+_AUDIO_PREPARE_LOCK = threading.Lock()
+_AUDIO_PREPARING: dict[str, dict] = {}
+
+
+def _new_prepare_slot() -> dict:
+    return {
+        "error": None,
+        "cancel": False,
+        "cancelled": False,
+        "progress": 0.0,
+        "done": threading.Event(),
+    }
+
+
+def _prepare_audio_worker(file_path: str, slot: dict) -> None:
+    try:
+        audio_only_cache(file_path)
+    except AudioPrepareCancelled:
+        slot["cancelled"] = True
+    except BaseException as e:
+        if slot.get("cancel"):
+            slot["cancelled"] = True
+        else:
+            slot["error"] = str(e) or type(e).__name__
+    finally:
+        slot["done"].set()
+
+
+def prepare_audio_cache(file_path: str, restart: bool = False) -> dict:
+    """音频缓存未就绪时交给后台线程生成；本调用只返回当前状态。
+
+    restart 用于终态（失败或已终止）后重新抽取，正在运行的任务不受影响。
+    """
+    if audio_cached_file(file_path):
+        return {"ready": True, "progress": 1.0}
+    key = _audio_cache_key(file_path)
+    with _AUDIO_PREPARE_LOCK:
+        slot = _AUDIO_PREPARING.get(key)
+        if restart and slot is not None and slot["done"].is_set():
+            _AUDIO_PREPARING.pop(key, None)
+            slot = None
+        if slot is None:
+            slot = _new_prepare_slot()
+            _AUDIO_PREPARING[key] = slot
+            threading.Thread(
+                target=_prepare_audio_worker,
+                args=(file_path, slot),
+                daemon=True,
+            ).start()
+        return {
+            "ready": False,
+            "progress": slot["progress"],
+            "error": slot["error"],
+            "cancelled": slot["cancelled"] or slot["cancel"],
+        }
+
+
+def cancel_audio_prepare(file_path: str) -> dict:
+    """终止后台抽音轨；返回时子进程已退出，可安全重新发起准备。"""
+    key = _audio_cache_key(file_path)
+    with _AUDIO_PREPARE_LOCK:
+        slot = _AUDIO_PREPARING.get(key)
+        if slot is None or slot["done"].is_set():
+            return {"cancelled": False}
+        slot["cancel"] = True
+        proc = slot.get("proc")
+        if proc is not None and proc.poll() is None:
+            proc.kill()
+    slot["done"].wait(timeout=10)
+    return {"cancelled": True}
+
+
 @_coalesce("audio")
 def audio_only_cache(file_path: str) -> str:
     """返回仅含音轨的缓存文件，不存在时按源编码直拷生成。
@@ -926,13 +1071,10 @@ def audio_only_cache(file_path: str) -> str:
     容器由源音轨编码决定，避免重编码；mp4 系容器把 moov 移到文件头，
     使浏览器在下载完成前即可起播。缓存 key 绑定源文件大小与修改时间。
     """
-    st = os.stat(file_path)
-    key = hashlib.sha1(
-        f"audio1|{file_path}|{st.st_size}|{st.st_mtime}".encode()
-    ).hexdigest()[:16]
-    cached = sorted(CACHE_DIR.glob(f"{key}_audio.*"))
+    cached = audio_cached_file(file_path)
     if cached:
-        return str(cached[0])
+        return cached
+    key = _audio_cache_key(file_path)
 
     info = probe(file_path)
     audio = info.get("audio")
@@ -949,6 +1091,9 @@ def audio_only_cache(file_path: str) -> str:
         "-y",
         "-hide_banner",
         "-nostdin",
+        "-progress",
+        "pipe:1",
+        "-nostats",
         "-i",
         file_path,
         "-vn",
@@ -958,8 +1103,13 @@ def audio_only_cache(file_path: str) -> str:
     if ext in (".mp4", ".m4a", ".mov"):
         cmd += ["-movflags", "+faststart"]
     cmd.append(tmp)
+    slot = _AUDIO_PREPARING.get(key)
     try:
-        run_collect(cmd, 8 * 1024 * 1024)
+        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        if slot is None:
+            run_collect(cmd, 8 * 1024 * 1024)
+        else:
+            run_progress(cmd, info.get("duration") or 0, slot)
         out = CACHE_DIR / f"{key}_audio{ext}"
         os.replace(tmp, out)
         return str(out)

@@ -90,6 +90,14 @@ main {
   gap: 10px;
   margin-bottom: 10px;
 }
+.prepare-box {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+.prepare-box[hidden] { display: none; }
+.prepare-box progress { width: 160px; height: 8px; }
 .player-box {
   position: relative;
   width: 100%;

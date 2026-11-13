@@ -5,12 +5,14 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
 import sys
 import threading
 import time
+from email.utils import formatdate
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
@@ -26,11 +28,13 @@ from ffmpeg_ops import (  # noqa: E402
     FfmpegBusy,
     assert_local_dir,
     assert_local_path,
-    audio_only_cache,
+    audio_cached_file,
     build_timeline_assets,
+    cancel_audio_prepare,
     clean_path_str,
     ffmpeg_version,
     keyframes_near,
+    prepare_audio_cache,
     probe,
 )
 from tasks import store  # noqa: E402
@@ -66,6 +70,15 @@ MIME = {
     ".mkv": "video/x-matroska",
     ".txt": "text/plain; charset=utf-8",
 }
+
+# Range 请求未给出结束位置时，单次最多返回的字节数。
+# 大媒体文件若一次推到文件尾，seek 掐断旧请求后线程仍挂在写，
+# 后续请求会继续堆积；分段返回让每个响应快速结束，浏览器按需续拉。
+MAX_RANGE_CHUNK = 8 * 1024 * 1024
+
+# 文件传输期间的连接超时（秒）。客户端 seek 后停止读取但保持连接时，
+# 写会卡在 TCP 零窗口；没有超时的话该线程会一直占着连接。
+MEDIA_IO_TIMEOUT = 20
 
 
 def file_stat(p: str):
@@ -192,7 +205,9 @@ class Handler(BaseHTTPRequestHandler):
 
     # ---------- 静态 / 文件 ----------
 
-    def _serve_file(self, file_path: str, download=False, filename=None):
+    def _serve_file(
+        self, file_path: str, download=False, filename=None, cacheable=False
+    ):
         st = file_stat(file_path)
         if not st:
             return self._error(404, "文件不存在")
@@ -200,10 +215,21 @@ class Handler(BaseHTTPRequestHandler):
         ext = os.path.splitext(file_path)[1].lower()
         mime = MIME.get(ext, "application/octet-stream")
 
+        etag = '"%s"' % hashlib.sha1(
+            f"{file_path}|{st.st_size}|{st.st_mtime_ns}".encode("utf-8", "replace")
+        ).hexdigest()[:16]
+        last_modified = formatdate(st.st_mtime, usegmt=True)
+
         headers = {
             "Content-Type": mime,
             "Accept-Ranges": "bytes",
-            "Cache-Control": "no-store",
+            "ETag": etag,
+            "Last-Modified": last_modified,
+            # 媒体与派生缓存允许浏览器保存字节，靠 ETag 校验新鲜度；
+            # no-store 会让每次 seek 都重新跨网取已下载过的区间。
+            "Cache-Control": (
+                "public, max-age=0, must-revalidate" if cacheable else "no-store"
+            ),
         }
         if download:
             name = filename or os.path.basename(file_path)
@@ -214,10 +240,16 @@ class Handler(BaseHTTPRequestHandler):
             )
 
         range_header = self.headers.get("Range")
+        if range_header and self.headers.get("If-Range"):
+            validator = self.headers["If-Range"].strip()
+            if validator not in (etag, last_modified):
+                range_header = None
+
         start = end = None
         if range_header:
             m = re.match(r"bytes=(\d*)-(\d*)", range_header)
             if m:
+                open_ended = m.group(2) == ""
                 if m.group(1) == "" and m.group(2) != "":
                     start = max(0, size - int(m.group(2)))
                     end = size - 1
@@ -232,6 +264,19 @@ class Handler(BaseHTTPRequestHandler):
                     self.send_header("Content-Length", "0")
                     self.end_headers()
                     return
+                # 只裁剪开放区间；显式给出 end 的请求原样满足
+                if open_ended:
+                    end = min(end, start + MAX_RANGE_CHUNK - 1)
+
+        if start is None and self.headers.get("If-None-Match"):
+            tags = [t.strip() for t in self.headers["If-None-Match"].split(",")]
+            if "*" in tags or etag in tags:
+                self.send_response(304)
+                for k in ("ETag", "Last-Modified", "Cache-Control"):
+                    self.send_header(k, headers[k])
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
 
         if start is not None:
             length = end - start + 1
@@ -240,11 +285,23 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_header(k, v)
             self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
             self.send_header("Content-Length", str(length))
-            self.end_headers()
-            if self.command == "HEAD":
-                return
+            offset = start
+        else:
+            length = size
+            self.send_response(200)
+            for k, v in headers.items():
+                self.send_header(k, v)
+            self.send_header("Content-Length", str(length))
+            offset = 0
+        self.end_headers()
+        if self.command == "HEAD":
+            return
+        prev_timeout = self.connection.gettimeout()
+        self.connection.settimeout(MEDIA_IO_TIMEOUT)
+        # seek 会掐断旧请求；断连或客户端停止读取时及时退出，别让线程挂着
+        try:
             with open(file_path, "rb") as f:
-                f.seek(start)
+                f.seek(offset)
                 remaining = length
                 while remaining > 0:
                     chunk = f.read(min(64 * 1024, remaining))
@@ -252,20 +309,14 @@ class Handler(BaseHTTPRequestHandler):
                         break
                     self.wfile.write(chunk)
                     remaining -= len(chunk)
-        else:
-            self.send_response(200)
-            for k, v in headers.items():
-                self.send_header(k, v)
-            self.send_header("Content-Length", str(size))
-            self.end_headers()
-            if self.command == "HEAD":
-                return
-            with open(file_path, "rb") as f:
-                while True:
-                    chunk = f.read(64 * 1024)
-                    if not chunk:
-                        break
-                    self.wfile.write(chunk)
+        except OSError:
+            # 断连、写超时、文件读取失败都结束本次请求，不再占着连接
+            self.close_connection = True
+        finally:
+            try:
+                self.connection.settimeout(prev_timeout)
+            except OSError:
+                pass
 
     def _serve_static(self, rel: str):
         safe = os.path.normpath(rel).lstrip("./\\")
@@ -276,8 +327,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._error(404, "资源不存在")
         ext = os.path.splitext(file_path)[1].lower()
         self._serve_file(file_path)
-        # 注意：_serve_file 已发送 Cache-Control: no-store；静态资源用短缓存
-        # （为简化实现，统一 no-store，对本地工具无性能影响）
+        # 静态资源保持 no-store，改动前端后刷新即可生效；
+        # 媒体与 /api/cache 走 cacheable=True，允许浏览器复用已下载字节。
 
     # ---------- 路由 ----------
 
@@ -347,6 +398,22 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:
                 return self._fail(e)
 
+        if p == "/api/prepare" and method == "GET":
+            try:
+                file_path = assert_local_path(q.get("path"))
+                restart = (q.get("restart") or "").lower() in ("1", "true", "yes")
+                return self._json(200, prepare_audio_cache(file_path, restart))
+            except Exception as e:
+                return self._fail(e)
+
+        if p == "/api/prepare/cancel" and method == "POST":
+            try:
+                return self._json(
+                    200, cancel_audio_prepare(assert_local_path(q.get("path")))
+                )
+            except Exception as e:
+                return self._fail(e)
+
         if p == "/api/fs/roots" and method == "GET":
             return self._json(
                 200, {"roots": list_roots(), "home": os.path.expanduser("~")}
@@ -364,8 +431,13 @@ class Handler(BaseHTTPRequestHandler):
                 file_path = assert_local_path(q.get("path"))
                 audio_only = (q.get("audio") or "").lower() in ("1", "true", "yes")
                 if audio_only:
-                    file_path = audio_only_cache(file_path)
-                return self._serve_file(file_path)
+                    # 抽音轨只由 /api/prepare 的后台任务负责；媒体请求绝不同步抽取，
+                    # 否则每个 seek 触发的 Range 请求都可能卡在长任务上。
+                    cached = audio_cached_file(file_path)
+                    if not cached:
+                        return self._error(503, "纯音频缓存尚未就绪，请先完成音轨准备")
+                    file_path = cached
+                return self._serve_file(file_path, cacheable=True)
             except Exception as e:
                 return self._fail(e)
 
@@ -451,7 +523,7 @@ class Handler(BaseHTTPRequestHandler):
             file_path = os.path.abspath(os.path.join(CACHE_DIR, name))
             if not file_path.startswith(str(CACHE_DIR)):
                 return self._error(403, "禁止访问")
-            return self._serve_file(file_path)
+            return self._serve_file(file_path, cacheable=True)
 
         if p == "/api/tasks" and method == "GET":
             return self._json(200, {"tasks": store.list()})
@@ -520,8 +592,14 @@ class Handler(BaseHTTPRequestHandler):
             unsubscribe()
 
 
+class Server(ThreadingHTTPServer):
+    daemon_threads = True
+    # 默认 backlog 只有 5；连续 seek 的并发连接会被挡在 accept 队列外
+    request_queue_size = 128
+
+
 def main():
-    server = ThreadingHTTPServer((HOST, PORT), Handler)
+    server = Server((HOST, PORT), Handler)
     print(f"[web-video-editor] http://{HOST}:{PORT}")
     print(f"[web-video-editor] ffmpeg  = {FFMPEG}")
     print(f"[web-video-editor] ffprobe = {FFPROBE}")
