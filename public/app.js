@@ -229,7 +229,9 @@
       loadTimelineAssets(path, state.duration);
       return;
     }
-    prepareAndPlay(path, keepVideo, false, token);
+    // 载入即用户显式意图：restart=1 清掉上一轮失败/已终止的终态槽位重新抽，
+    // 正在跑的任务不受影响（服务端 restart 仅清理已结束的槽位）
+    prepareAndPlay(path, keepVideo, true, token);
   }
 
   function renderMediaInfo(info) {

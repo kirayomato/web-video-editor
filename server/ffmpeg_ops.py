@@ -201,6 +201,17 @@ class AudioPrepareCancelled(RuntimeError):
     """抽音轨被终止。"""
 
 
+def _out_progress(out_time_us: float, duration: float) -> float | None:
+    """out_time（微秒）换算进度比例；duration 非正时返回 None。
+
+    ffmpeg 的 out_time_ms 名为毫秒实为微秒（历史 bug，值与 out_time_us 相同），
+    两个字段统一按微秒换算；按毫秒换算会让进度瞬间打满 0.99。
+    """
+    if duration <= 0:
+        return None
+    return min(0.99, out_time_us / (duration * 1e6))
+
+
 def run_progress(args, duration: float, slot: dict) -> None:
     """执行长命令并把进度写进 slot；slot["cancel"] 置位时终止子进程。
 
@@ -239,9 +250,9 @@ def run_progress(args, duration: float, slot: dict) -> None:
                     t = float(v)
                 except ValueError:
                     continue
-                denom = duration * (1e6 if k == "out_time_us" else 1e3)
-                if denom > 0:
-                    slot["progress"] = min(0.99, max(slot["progress"], t / denom))
+                p = _out_progress(t, duration)
+                if p is not None:
+                    slot["progress"] = max(slot["progress"], p)
             elif k == "progress" and v == "end":
                 slot["progress"] = 1.0
         proc.wait()

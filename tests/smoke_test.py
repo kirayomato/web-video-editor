@@ -298,7 +298,7 @@ def main():
     mathjs = get("/timeline_math.js", raw=True)
     check(
         "timeline_math 可访问",
-        b"zoomAt" in mathjs and b"waveBackground" in mathjs,
+        b"zoomAt" in mathjs and b"panView" in mathjs,
         f"{len(mathjs)} bytes",
     )
     check("页面引入 timeline_math", "timeline_math.js" in page)
@@ -489,6 +489,100 @@ def main():
     # 前端入口
     check("首页含浏览文件入口", 'id="browseBtn"' in page and 'id="fsModal"' in page)
     check("app.js 含文件浏览器逻辑", "/api/fs/list" in src and "openFsBrowser" in src)
+
+    # 18. 音轨准备（/api/prepare 后台抽取）与媒体缓存契约
+    # 用独立副本保证无缓存：mtime 变化 → 缓存 key 变化
+    prep = os.path.join(ROOT, "tmp", "prep_sample.mp4")
+    shutil.copyfile(SAMPLE, prep)
+    penc = urllib.parse.quote(prep)
+    # 未就绪时 audio=1 不做同步抽取，直接 503
+    err = ""
+    code = 0
+    try:
+        get(f"/api/media?path={penc}&audio=1", raw=True)
+    except urllib.error.HTTPError as e:
+        code = e.code
+        err = json.loads(e.read().decode("utf-8") or "{}").get("error", "")
+    check("audio=1 未就绪返回 503", code == 503 and "尚未就绪" in err, f"{code} {err[:40]}")
+    # 轮询到就绪
+    st = {}
+    t0 = time.time()
+    while time.time() - t0 < 60:
+        st = get(f"/api/prepare?path={penc}")
+        if st.get("ready"):
+            break
+        if st.get("error") or st.get("cancelled"):
+            break
+        time.sleep(0.3)
+    check("prepare 轮询就绪", st.get("ready") is True, str(st)[:120])
+    check("prepare 进度到 1", st.get("progress") == 1.0, str(st.get("progress")))
+    # 就绪后 audio=1 可访问
+    body = get(f"/api/media?path={penc}&audio=1", raw=True)
+    check("audio=1 就绪后可播", len(body) > 1000, f"{len(body)} bytes")
+    # 幂等：已就绪直接返回 ready
+    st = get(f"/api/prepare?path={penc}")
+    check("prepare 幂等 ready", st.get("ready") is True and st.get("progress") == 1.0)
+    # restart=1 对已就绪无副作用（不重抽）
+    st = get(f"/api/prepare?path={penc}&restart=1")
+    check("restart=1 已就绪仍 ready", st.get("ready") is True, str(st)[:80])
+    # 空闲 cancel 返回 cancelled=False
+    c = post(f"/api/prepare/cancel?path={penc}", {})
+    check("cancel 空闲任务 cancelled=False", c.get("cancelled") is False, str(c))
+
+    # 19. ETag/304 缓存协商
+    req = urllib.request.Request(BASE + f"/api/media?path={penc}")
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        etag = resp.headers.get("ETag")
+        check("media 带 ETag", bool(etag), str(etag))
+    req = urllib.request.Request(BASE + f"/api/media?path={penc}")
+    req.add_header("If-None-Match", etag)
+    code = 0
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            code = resp.status
+    except urllib.error.HTTPError as e:
+        code = e.code
+    check("If-None-Match 命中 304", code == 304, str(code))
+
+    # 20. 开放区间 Range 分段上限（MAX_RANGE_CHUNK=8MB）：
+    # 未给结束位置时单次最多 8MB，浏览器按需续拉
+    big = os.path.join(ROOT, "tmp", "range_big.bin")
+    with open(big, "wb") as f:
+        f.truncate(9 * 1024 * 1024)  # 9MB 稀疏文件
+    req = urllib.request.Request(
+        BASE + f"/api/media?path={urllib.parse.quote(big)}",
+        headers={"Range": "bytes=0-"},
+    )
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        body = resp.read()
+        cr = resp.headers.get("Content-Range", "")
+    check(
+        "开放区间单次 ≤8MB",
+        len(body) == 8 * 1024 * 1024 and cr.startswith("bytes 0-"),
+        f"len={len(body)} {cr}",
+    )
+    # 显式区间不裁剪
+    req = urllib.request.Request(
+        BASE + f"/api/media?path={urllib.parse.quote(big)}",
+        headers={"Range": "bytes=100-299"},
+    )
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        body = resp.read()
+    check("显式区间原样返回", len(body) == 200, f"len={len(body)}")
+
+    # 21. 进度换算单测（ffmpeg out_time_ms 实为微秒，勿按毫秒换算）
+    from ffmpeg_ops import _out_progress  # noqa: E402
+
+    check(
+        "out_time 微秒换算进度",
+        abs(_out_progress(1.5e6, 3.0) - 0.5) < 1e-9,
+        f"{_out_progress(1.5e6, 3.0)}",
+    )
+    check(
+        "进度封顶 0.99",
+        _out_progress(10e6, 3.0) == 0.99 and _out_progress(-1, 3.0) <= 0.99,
+    )
+    check("duration 非正不换算", _out_progress(1e6, 0) is None)
 
     print(f"\n===== 结果: PASS={PASS} FAIL={FAIL} =====")
     return 1 if FAIL else 0
