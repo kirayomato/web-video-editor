@@ -331,6 +331,15 @@ def main():
         and "prepareStatusText" not in src
         and "PREPARE_PHASE_TEXT" not in src,
     )
+    # 状态栏字号与「进行中」高亮态
+    css = get("/style.css", raw=True).decode("utf-8", "replace")
+    bar_at = css.find(".statusbar {")
+    bar_css = css[bar_at:css.find("}", bar_at)] if bar_at >= 0 else ""
+    check("状态栏字号调大到 14px", "font-size: 14px" in bar_css, bar_css[:70])
+    check(
+        "准备中挂专属高亮态",
+        ".statusbar.busy" in css and "'busy'" in src,
+    )
 
     # 14. 路径清洗（Windows「复制为路径」带引号；中文+空格文件名）
     sp = os.path.join(ROOT, "tmp", "测试 video.mp4")

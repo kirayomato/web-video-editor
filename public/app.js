@@ -169,7 +169,7 @@
     prepareCancelled = false;
     showPlayerPlaceholder();
     showPrepareUI(true);
-    status('正在准备纯音频… 完成后自动加载播放器…');
+    status('正在准备纯音频… 完成后自动加载播放器…', 'busy');
     const ready = await prepareAudio(path, token, restart);
     if (prepareCancelled || token !== prepareToken || ready === null) return;
     showPrepareUI(false);
@@ -178,7 +178,7 @@
       return;
     }
     state.audioReady = true;
-    status('音轨就绪，正在加载播放器…');
+    status('音轨就绪，正在加载播放器…', 'busy');
     loadPlayer(!keepVideo);
     // 音轨缓存就绪后才生成波形，波形直接吃缓存，不再扫完整源视频
     loadTimelineAssets(path, state.duration);
@@ -208,7 +208,7 @@
     $('pathInput').value = path;
     $('downloadSourceBtn').disabled = false;
 
-    status('探测媒体信息…');
+    status('探测媒体信息…', 'busy');
     let hasAudio = false;
     try {
       const info = await api('/api/probe?path=' + encodeURIComponent(path));
@@ -274,7 +274,7 @@
 
   async function loadTimelineAssets(path, duration) {
     const token = ++waveToken;
-    status('正在生成波形…');
+    status('正在生成波形…', 'busy');
     try {
       const assets = await api(`/api/timeline?path=${encodeURIComponent(path)}&duration=${duration || 0}`);
       // 期间用户已切到别的文件：丢弃这次结果，否则旧波形会盖在新画布上

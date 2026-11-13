@@ -60,13 +60,25 @@ h2 { font-size: 15px; font-weight: 600; margin: 0 0 12px; }
 }
 
 .statusbar {
-  font-size: 12px;
+  font-size: 14px;
   color: var(--text-2);
-  min-height: 18px;
+  /* 所有状态共用内边距/透明左边条，切到 busy 时不会撑高顶栏造成跳动 */
+  min-height: 30px;
+  padding: 4px 10px;
+  border-left: 3px solid transparent;
+  border-radius: 4px;
+  transition: color .18s, background-color .18s, border-color .18s;
 }
 .statusbar.error { color: var(--err); }
 .statusbar.ok { color: var(--ok); }
 .statusbar.warn { color: #c4790a; }
+/* 载入 / 音轨准备 / 波形生成等「进行中」态：深蓝加粗 + 淡蓝底 + 强调条 */
+.statusbar.busy {
+  color: #0b5cad;
+  font-weight: 600;
+  background: var(--accent-soft);
+  border-left-color: var(--accent);
+}
 
 main {
   padding: 16px 20px 40px;
@@ -95,9 +107,18 @@ main {
   align-items: center;
   gap: 8px;
   margin-left: auto;
+  /* 准备中整块高亮，和状态栏的 busy 态呼应 */
+  padding: 5px 10px;
+  background: var(--accent-soft);
+  border: 1px solid #b9d8f5;
+  border-radius: 8px;
 }
 .prepare-box[hidden] { display: none; }
-.prepare-box progress { width: 160px; height: 8px; }
+.prepare-box progress {
+  width: 160px;
+  height: 10px;
+  accent-color: var(--accent);
+}
 .player-box {
   position: relative;
   width: 100%;
@@ -220,7 +241,7 @@ main {
   border: 1px solid var(--border);
   border-radius: 6px;
 }
-.meta { color: var(--text-2); font-size: 12px; }
+.meta { color: var(--text-2); font-size: 13px; }
 
 /* ---------- 布局 ---------- */
 
@@ -291,7 +312,7 @@ label { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
 .op-form { display: none; flex-direction: column; gap: 10px; }
 .op-form.active { display: flex; }
 .inline-fields { display: flex; gap: 16px; flex-wrap: wrap; align-items: center; }
-.hint { color: var(--text-2); font-size: 12px; margin: 0; }
+.hint { color: var(--text-2); font-size: 13px; margin: 0; }
 .op-actions { display: flex; gap: 10px; margin-top: 14px; }
 
 .cmd-preview {
