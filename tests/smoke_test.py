@@ -322,6 +322,15 @@ def main():
         "在途旧波形响应按代次丢弃",
         "++waveToken" in src and "token !== waveToken" in src,
     )
+    # 进度反馈只保留进度条一处：百分比文字元素、阶段/耗时文案生成函数
+    # 都不应再出现（避免界面上又是进度条又是文字进度）
+    check(
+        "进度反馈只剩进度条",
+        '<progress id="prepareProgress"' in page
+        and 'id="preparePercent"' not in page
+        and "prepareStatusText" not in src
+        and "PREPARE_PHASE_TEXT" not in src,
+    )
 
     # 14. 路径清洗（Windows「复制为路径」带引号；中文+空格文件名）
     sp = os.path.join(ROOT, "tmp", "测试 video.mp4")
@@ -535,9 +544,9 @@ def main():
         time.sleep(0.3)
     check("prepare 轮询就绪", st.get("ready") is True, str(st)[:120])
     check("prepare 进度到 1", st.get("progress") == 1.0, str(st.get("progress")))
-    # 未就绪响应必须带 phase/elapsed：前端状态栏靠它显示阶段 + 「已用 Xs」。
-    # -c:a copy 抽音轨时 ffmpeg 只在流拷完报一次进度，没有这两个字段
-    # 前端就只能干等一个不动的 0%。
+    # API 契约：未就绪响应带 phase/elapsed。UI 只展示进度条，这两个字段供
+    # 排查「准备卡在哪一步」时直接查接口用，不再是前端文案的数据源。
+    # -c:a copy 抽音轨时 ffmpeg 只在流拷完报一次进度，progress 全程只有 0/1。
     check(
         "prepare 返回阶段与耗时",
         first_pending is not None
